@@ -1,4 +1,5 @@
 import pygame
+import core
 import configs.settings as cs
 
 # pygame setup
@@ -16,6 +17,9 @@ while running:
 
     # fill the screen with a color to wipe away anything from last frame
     screen.fill(cs.dgreen)
+
+    drones = core.Drone(cs.startX, cs.startY)
+    drones.draw(screen, 10)
 
     # RENDER YOUR GAME HERE
 
