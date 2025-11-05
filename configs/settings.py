@@ -14,8 +14,8 @@ blue = (0, 0, 255)
 #Drones
 startX = 580
 startY = 650
+speed = 5
 
 #Settings
-drone = 5
 fire = 2.5
 fps = 60

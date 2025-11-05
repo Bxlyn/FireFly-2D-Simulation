@@ -18,8 +18,8 @@ while running:
     # fill the screen with a color to wipe away anything from last frame
     screen.fill(cs.dgreen)
 
-    drones = core.Drone(cs.startX, cs.startY)
-    drones.draw(screen, 10)
+    drones = core.Drone(cs.startX, cs.startY, cs.speed)
+    drones.draw(screen)
 
     # RENDER YOUR GAME HERE
 
