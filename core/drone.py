@@ -12,24 +12,29 @@ def move_towards(p: pygame.Vector2, target: pygame.Vector2, max_step: float) -> 
 class Drone:
     """
     Manages 4 drones:
-      - all start at the global center
+      - all start at the compost (or screen) center
       - each assigned one quadrant (sector)
       - phase 1: go to the sector center
       - phase 2: patrol the sector perimeter (clockwise)
     """
-    def __init__(self, x, y, speed):
+    def __init__(self, x, y, speed, *, start_delay, compost=None):
         self.radius = 10
         self.speed = float(speed)             # world units per second
         self.color = cs.blue
 
         w, h = cs.screen_width, cs.screen_height
         cx, cy = w // 2, h // 2
-        self.world_center = pygame.Vector2(cx, cy)
+
+        # If a Compost is provided, spawn at its position
+        if compost is not None:
+            self.world_center = compost.pos.copy()
+        else:
+            self.world_center = pygame.Vector2(cx, cy)
 
         # Define quadrants (top-left, top-right, bottom-left, bottom-right)
         self.sectors = [
             pygame.Rect(0,      0,      w // 2, h // 2),  # TL
-            pygame.Rect(w // 2, 0,      w // 2, h // 2, ),# TR
+            pygame.Rect(w // 2, 0,      w // 2, h // 2),  # TR
             pygame.Rect(0,      h // 2, w // 2, h // 2),  # BL
             pygame.Rect(w // 2, h // 2, w // 2, h // 2),  # BR
         ]
@@ -37,7 +42,7 @@ class Drone:
         # Sector centers
         self.sector_centers = [pygame.Vector2(r.center) for r in self.sectors]
 
-        # Start all drones at the screen center
+        # Start all drones at the compost/screen center
         self.positions = [self.world_center.copy() for _ in range(4)]
 
         # For each drone: phase 0 = heading to sector center, phase 1 = patrolling
@@ -62,21 +67,25 @@ class Drone:
             ]
             self.patrol_paths.append(path)
 
+        # ---- launch delay state ----
+        self.start_delay = float(start_delay)  # seconds
+        self._elapsed = 0.0                    # time since spawn
+
     def draw(self, surface):
         # (Optional) visualize sectors
         for r in self.sectors:
-            pygame.draw.rect(surface, cs.dgreen, r, 1)  # thin black outline
-
-        # (Optional) draw sector centers
-        for c in self.sector_centers:
-            pygame.draw.circle(surface, (255, 255, 255), (int(c.x), int(c.y)), 3)
+            pygame.draw.rect(surface, cs.dgreen, r, 1)  # thin outline
 
         # Draw each drone
         for pos in self.positions:
             pygame.draw.circle(surface, self.color, (int(pos.x), int(pos.y)), self.radius)
 
     def move(self, dt: float):
-        # max movement per frame
+        # accumulate time and hold position until delay passes
+        if self._elapsed < self.start_delay:
+            self._elapsed += dt
+            return  # stay parked at compost
+
         step = self.speed * dt
 
         for i in range(4):
