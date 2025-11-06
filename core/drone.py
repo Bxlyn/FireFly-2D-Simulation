@@ -65,7 +65,7 @@ class Drone:
     def draw(self, surface):
         # (Optional) visualize sectors
         for r in self.sectors:
-            pygame.draw.rect(surface, (0, 0, 0), r, 1)  # thin black outline
+            pygame.draw.rect(surface, cs.dgreen, r, 1)  # thin black outline
 
         # (Optional) draw sector centers
         for c in self.sector_centers:
