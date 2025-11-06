@@ -12,9 +12,9 @@ forestgreen = (34, 139, 34)
 blue = (0, 0, 255)
 
 #Drones
-startX = 580
-startY = 650
-speed = 5
+startX = 640
+startY = 360
+speed = 80
 
 #Settings
 fire = 2.5
