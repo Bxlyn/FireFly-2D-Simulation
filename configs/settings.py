@@ -15,14 +15,17 @@ cyellow = (150, 100, 50)
 startX = 640
 startY = 360
 speed = 80
-start_delay = 3
+start_delay = 2
 drone_radius = 7     # body draw radius (px)
 
 # Vertical FOV (downward-looking)
-fov_angle_deg = 90   # 80–100 realistic; tweak here
-altitude_px = 90     # "height" above ground in pixels; tweak to resize footprint
-fov_alpha = 70       # 0..255 translucency for the disk
+fov_angle_deg = 90   # 80–100 realistic
+altitude_px = 90     # bigger => bigger FOV footprint
+fov_alpha = 70       # transparency of FOV disk
 
+# Sweep coverage controls
+sweep_stride_factor = 0.9  # 0.7..1.0 (smaller = more overlap between tracks)
+show_sweep_guides = False  # True to draw the sweep lines for debugging
 # Compost
 cradius = 48
 
