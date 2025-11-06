@@ -16,12 +16,12 @@ startX = 640
 startY = 360
 speed = 80
 start_delay = 3
-drone_radius = 7  
+drone_radius = 7     # body draw radius (px)
 
-# FOV (visual + constraints)
-fov_angle_deg = 90          # 80–100 realistic; start with 90
-fov_radius = 140            # how far the drone "covers"
-fov_color = (0, 0, 255, 70) # RGBA, low opacity overlay
+# Vertical FOV (downward-looking)
+fov_angle_deg = 90   # 80–100 realistic; tweak here
+altitude_px = 90     # "height" above ground in pixels; tweak to resize footprint
+fov_alpha = 70       # 0..255 translucency for the disk
 
 # Compost
 cradius = 48

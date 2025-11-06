@@ -10,46 +10,26 @@ def move_towards(p: pygame.Vector2, target: pygame.Vector2, max_step: float) -> 
         return target
     return p + diff.normalize() * max_step
 
-def _wedge_points(center: pygame.Vector2, heading: pygame.Vector2, radius: float, angle_deg: float, samples: int = 22):
-    """
-    Build polygon points for a filled wedge (sector).
-    center: Vector2
-    heading: unit Vector2 (direction drone is facing)
-    radius: FOV radius
-    angle_deg: full cone angle
-    samples: number of arc samples
-    """
-    # heading angle in degrees (pygame uses x-right, y-down)
-    theta = math.degrees(math.atan2(heading.y, heading.x))
-    half = angle_deg / 2.0
-    start = math.radians(theta - half)
-    end = math.radians(theta + half)
-
-    points = [ (int(center.x), int(center.y)) ]
-    for i in range(samples + 1):
-        t = start + (end - start) * (i / samples)
-        x = center.x + radius * math.cos(t)
-        y = center.y + radius * math.sin(t)
-        points.append((int(x), int(y)))
-    return points
-
 class Drone:
     """
     4 drones:
       - spawn spaced inside compost (one per compost quadrant)
       - go to their sector center
-      - then patrol sector perimeter
-      - draw transparent FOV wedge and clamp motion by FOV radius
+      - patrol sector perimeter
+      - draw translucent circular FOV footprint (vertical FOV)
+      - motion clamped by FOV radius so coverage stays in sector
     """
     def __init__(self, x, y, speed, *, start_delay, compost=None):
         # Visual/body
         self.radius = float(cs.drone_radius)
         self.color = cs.blue
 
-        # FOV
-        self.fov_radius = float(cs.fov_radius)
+        # FOV circle parameters
         self.fov_angle = float(cs.fov_angle_deg)
-        self.fov_rgba = cs.fov_color  # (r,g,b,a)
+        self.altitude = float(cs.altitude_px)
+        # footprint radius from vertical FOV
+        self.fov_radius = self.altitude * math.tan(math.radians(self.fov_angle / 2.0))
+        self.fov_alpha = int(cs.fov_alpha)
 
         self.speed = float(speed)  # units/sec
 
@@ -82,20 +62,13 @@ class Drone:
             offset = pygame.Vector2(spawn_ring, 0).rotate(ang)
             self.positions.append(self.world_center + offset)
 
-        # Heading (unit) per drone used for FOV orientation
-        # Initialize headings pointing outward to their sector center
-        self.heading = []
-        for i in range(4):
-            v = (self.sector_centers[i] - self.positions[i])
-            self.heading.append(v.normalize() if v.length() > 0 else pygame.Vector2(1, 0))
-
         # State
         self.phase = [0] * 4           # 0: go-to-center, 1: patrol
         self.current_wp_idx = [0] * 4  # patrol waypoint
         self.start_delay = float(start_delay)
         self._elapsed = 0.0
 
-        # Patrol waypoints inset by FOV radius (so FOV stays inside sector)
+        # Patrol waypoints inset by **FOV radius**
         inset = self.fov_radius + 4
         self.patrol_paths = []
         for r in self.sectors:
@@ -103,7 +76,7 @@ class Drone:
             right  = r.right  - inset
             top    = r.top    + inset
             bottom = r.bottom - inset
-            # Keep inset valid even if fov is huge
+            # keep inset valid if FOV is huge
             left, right = min(left, right), max(left, right)
             top, bottom = min(top, bottom), max(top, bottom)
 
@@ -115,12 +88,18 @@ class Drone:
             ]
             self.patrol_paths.append(path)
 
-    def _draw_fov(self, surface: pygame.Surface, center: pygame.Vector2, heading: pygame.Vector2):
-        # Draw translucent FOV wedge on a separate alpha surface, then blit
-        fov_surf = pygame.Surface((cs.screen_width, cs.screen_height), pygame.SRCALPHA)
-        pts = _wedge_points(center, heading, self.fov_radius, self.fov_angle, samples=28)
-        pygame.draw.polygon(fov_surf, self.fov_rgba, pts)
-        surface.blit(fov_surf, (0, 0))
+        # Pre-allocate alpha surface for FOV (screen-sized; one blit per drone)
+        self._fov_surface = pygame.Surface((w, h), pygame.SRCALPHA)
+
+    def _draw_fov_circle(self, surface: pygame.Surface, center: pygame.Vector2):
+        # Clear temp surface (alpha)
+        self._fov_surface.fill((0, 0, 0, 0))
+        # Draw translucent filled circle
+        color = (self.color[0], self.color[1], self.color[2], self.fov_alpha)
+        pygame.draw.circle(self._fov_surface, color,
+                           (int(center.x), int(center.y)), int(self.fov_radius))
+        # Blit under the drone
+        surface.blit(self._fov_surface, (0, 0))
 
     def draw(self, surface):
         # (Optional) visualize sector bounds
@@ -128,10 +107,10 @@ class Drone:
             pygame.draw.rect(surface, cs.dgreen, r, 1)
 
         # Draw FOV first (under the drones)
-        for i in range(4):
-            self._draw_fov(surface, self.positions[i], self.heading[i])
+        for pos in self.positions:
+            self._draw_fov_circle(surface, pos)
 
-        # Draw drones
+        # Draw drones on top
         for pos in self.positions:
             pygame.draw.circle(surface, self.color, (int(pos.x), int(pos.y)), int(self.radius))
 
@@ -145,23 +124,17 @@ class Drone:
         for i in range(4):
             pos = self.positions[i]
 
+            # Choose target: center first, then patrol waypoints
             if self.phase[i] == 0:
-                # Move to sector center
                 target = self.sector_centers[i]
             else:
-                # Patrol along perimeter waypoints
                 path = self.patrol_paths[i]
                 wp_i = self.current_wp_idx[i]
                 target = path[wp_i]
 
             new_pos = move_towards(pos, target, step)
 
-            # Update heading (for FOV orientation)
-            v = (target - pos)
-            if v.length() > 0:
-                self.heading[i] = v.normalize()
-
-            # If we reached the target center/waypoint, advance state
+            # If reached the target center/waypoint, advance
             if new_pos.distance_to(target) == 0:
                 if self.phase[i] == 0:
                     self.phase[i] = 1
@@ -171,8 +144,8 @@ class Drone:
 
             self.positions[i] = new_pos
 
-            # Clamp by FOV radius (not the body) so the *coverage* stays inside the sector
+            # Clamp by **FOV radius** so coverage stays within the sector
             r = self.sectors[i]
-            margin = self.fov_radius
-            self.positions[i].x = max(r.left + margin,  min(self.positions[i].x, r.right  - margin))
-            self.positions[i].y = max(r.top  + margin,  min(self.positions[i].y, r.bottom - margin))
+            m = self.fov_radius
+            self.positions[i].x = max(r.left + m,  min(self.positions[i].x, r.right  - m))
+            self.positions[i].y = max(r.top  + m,  min(self.positions[i].y, r.bottom - m))
