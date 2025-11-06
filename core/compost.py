@@ -14,11 +14,17 @@ class Compost:
         self.radius = radius
         self.color = color
         self.ring_color = (210, 180, 120)
+        self.guide_color = (230, 230, 230)
 
     def draw(self, surface):
+        cx, cy = int(self.pos.x), int(self.pos.y)
+
         # base
-        pygame.draw.circle(surface, self.color,
-                           (int(self.pos.x), int(self.pos.y)), self.radius)
+        pygame.draw.circle(surface, self.color, (cx, cy), self.radius)
+
         # decorative ring
-        pygame.draw.circle(surface, self.ring_color,
-                           (int(self.pos.x), int(self.pos.y)), self.radius + 6, 2)
+        pygame.draw.circle(surface, self.ring_color, (cx, cy), self.radius + 6, 2)
+
+        # quadrant guides (crosshair)
+        pygame.draw.line(surface, self.guide_color, (cx - self.radius, cy), (cx + self.radius, cy), 2)
+        pygame.draw.line(surface, self.guide_color, (cx, cy - self.radius), (cx, cy + self.radius), 2)

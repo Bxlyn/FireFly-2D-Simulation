@@ -20,7 +20,7 @@ start_delay = 3
 
 
 #Compost
-cradius = 36
+cradius = 56
 #
 fire = 2.5
 fps = 60
