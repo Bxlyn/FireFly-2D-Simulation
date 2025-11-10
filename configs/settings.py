@@ -23,10 +23,15 @@ fov_angle_deg = 90   # 80–100 realistic
 altitude_px = 90     # bigger => bigger FOV footprint
 fov_alpha = 70       # transparency of FOV disk
 
-# Sweep coverage controls
-sweep_stride_factor = 0.9  # 0.7..1.0 (smaller = more overlap between tracks)
-show_sweep_guides = False  # True to draw the sweep lines for debugging
-opt_stride_factor = 0.98
+#Monte-Carlo
+mc_cell_px = 16            # grid cell size. 12-24 is typical; smaller = finer belief, slower
+mc_candidates = 60         # random candidates sampled per replan
+mc_replan_seconds = 0.7    # how often to resample targets if we haven't arrived
+mc_cost_per_px = 0.0008    # travel cost weight in utility (probability units per pixel)
+mc_detect_strength = 0.85   # fraction removed from belief inside FOV each observation
+mc_diffusion = 0.06         # probability diffusion per update (0..1). 0=static, 0.05-0.1=gentle drift
+show_belief_heatmap = False # overlay heatmap (can be slow)
+heatmap_alpha = 120         # heatmap opacity (0..255)
 
 # Compost
 cradius = 48

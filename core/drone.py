@@ -1,5 +1,6 @@
 # core/drone.py
 import math
+import random
 import pygame
 import configs.settings as cs
 
@@ -18,28 +19,25 @@ def _screen_clamp(pos: pygame.Vector2, margin: float, w: int, h: int):
     return pos
 
 def _sector_safe_rect(rect: pygame.Rect, margin: float) -> pygame.Rect:
-    # shrink by FOV radius so the FOV circle stays inside
+    # shrink by FOV radius so the FOV circle stays inside the sector
     left   = rect.left   + margin
     right  = rect.right  - margin
     top    = rect.top    + margin
     bottom = rect.bottom - margin
-    # repair if FOV is huge
-    if right < left:   left, right   = right, left
-    if bottom < top:   top, bottom   = bottom, top
-    safe = pygame.Rect(int(left), int(top), int(right - left), int(bottom - top))
-    return safe
+    if right < left:   left, right = right, left
+    if bottom < top:   top, bottom = bottom, top
+    return pygame.Rect(int(left), int(top), int(right - left), int(bottom - top))
 
-# ---------- drone ----------
+# ---------- drone (Monte Carlo search) ----------
 
 class Drone:
     """
-    4 drones:
-      - spawn spaced inside compost (one per compost quadrant)
-      - go to sector entry
-      - sweep sector with optimal parallel strips (spacing s = 2*r * factor, factor<=1)
-      - orientation chosen along the LONGER side to minimize turns/overhead
-      - motion clamped by FOV radius so coverage stays inside each sector
-      - smooth start after delay (consumes leftover dt)
+    4 drones (one per quadrant):
+      - maintain a belief grid over their sector
+      - Monte-Carlo choose next waypoint: sample K candidates, score = expected gain - travel cost
+      - move to best candidate, update belief from FOV, diffuse, renormalize
+      - keep FOV footprint fully inside sector (clamps use FOV radius)
+      - smooth start after compost delay (consumes leftover dt)
     """
     def __init__(self, x, y, speed, *, start_delay, compost=None):
         # Visual/body
@@ -52,11 +50,15 @@ class Drone:
         self.fov_radius = self.altitude * math.tan(math.radians(self.fov_angle / 2.0))
         self.fov_alpha = int(cs.fov_alpha)
 
-        # Optimal strip spacing (exact 2r with optional tiny overlap)
-        self.opt_stride_factor = float(getattr(cs, "opt_stride_factor", 1.0))
-        self.strip_spacing = max(1.0, 2.0 * self.fov_radius * self.opt_stride_factor)
+        # Monte Carlo params
+        self.cell = int(getattr(cs, "mc_cell_px", 16))
+        self.K = int(getattr(cs, "mc_candidates", 60))
+        self.replan_T = float(getattr(cs, "mc_replan_seconds", 0.7))
+        self.cost_per_px = float(getattr(cs, "mc_cost_per_px", 0.0008))
+        self.detect_strength = float(getattr(cs, "mc_detect_strength", 0.85))
+        self.diffusion = float(getattr(cs, "mc_diffusion", 0.06))
 
-        self.speed = float(speed)  # units/sec
+        self.speed = float(speed)  # px/sec
 
         w, h = cs.screen_width, cs.screen_height
         cx, cy = w // 2, h // 2
@@ -71,123 +73,210 @@ class Drone:
 
         # Define quadrants (TL, TR, BL, BR)
         self.sectors = [
-            pygame.Rect(0,      0,      w // 2, h // 2),  # 0: TL
-            pygame.Rect(w // 2, 0,      w // 2, h // 2),  # 1: TR
-            pygame.Rect(0,      h // 2, w // 2, h // 2),  # 2: BL
-            pygame.Rect(w // 2, h // 2, w // 2, h // 2),  # 3: BR
+            pygame.Rect(0,      0,      w // 2, h // 2),  # 0
+            pygame.Rect(w // 2, 0,      w // 2, h // 2),  # 1
+            pygame.Rect(0,      h // 2, w // 2, h // 2),  # 2
+            pygame.Rect(w // 2, h // 2, w // 2, h // 2),  # 3
         ]
 
-        # Safe rects (FOV-contained)
+        # Safe rects: inset so FOV disk stays inside
         self.safe_rects = [_sector_safe_rect(r, self.fov_radius) for r in self.sectors]
-        self.sector_centers = [pygame.Vector2(r.center) for r in self.sectors]
 
-        # Spawn four drones around a ring inside the compost (one per slice)
+        # Spawn four drones spaced inside compost (one per compost slice)
         spawn_ring = max(self.radius + 4, min(compost_radius - self.radius - 4, compost_radius * 0.66))
-        spawn_angles = [135, 45, 225, 315]  # TL, TR, BL, BR (match sectors)
+        spawn_angles = [135, 45, 225, 315]  # TL, TR, BL, BR
         self.positions = []
         for ang in spawn_angles:
             offset = pygame.Vector2(spawn_ring, 0).rotate(ang)
             self.positions.append(self.world_center + offset)
 
         # State per drone
-        # phase: 0 delay/approach, 2 sweeping
-        self.phase = [0] * 4
-        self.current_wp_idx = [0] * 4
+        self.phase = [0] * 4                 # 0: approach into sector, 2: Monte-Carlo navigation
+        self.mc_target = [None] * 4          # current waypoint
+        self.replan_timer = [0.0] * 4
         self.start_delay = float(start_delay)
         self._elapsed = 0.0
 
-        # Build optimal (orientation-aware) sweep paths for each sector
-        self.sweep_paths = []
+        # Belief grids (one per sector)
+        self.grid_origin = []   # (left, top) per sector
+        self.grid_dims = []     # (nx, ny) per sector
+        self.belief = []        # belief[sector] is ny x nx list of floats
         for safe in self.safe_rects:
-            self.sweep_paths.append(self._build_optimal_sweep_path(safe))
+            left, top, width, height = safe.left, safe.top, safe.width, safe.height
+            nx = max(1, math.ceil(width / self.cell))
+            ny = max(1, math.ceil(height / self.cell))
+            total = nx * ny
+            # uniform initial belief
+            grid = [[1.0 / total for _ in range(nx)] for _ in range(ny)]
+            self.belief.append(grid)
+            self.grid_origin.append((left, top))
+            self.grid_dims.append((nx, ny))
 
-        # Pre-allocate alpha surface for FOV (screen-sized; one blit per drone)
+        # Alpha surface for semi-transparent FOV circles
         self._fov_surface = pygame.Surface((w, h), pygame.SRCALPHA)
 
-    # ---------- path generation (optimal parallel strips) ----------
+        # RNG
+        self._rng = random.Random(1337)
 
-    def _build_optimal_sweep_path(self, safe: pygame.Rect):
-        """
-        Parallel-strip coverage with spacing s = 2r * factor (factor<=1),
-        oriented along the LONGER side of the safe rect.
-        """
-        left, top, width, height = float(safe.left), float(safe.top), float(safe.width), float(safe.height)
-        right  = left + width
-        bottom = top  + height
-        s = self.strip_spacing
+    # ---------- belief utilities ----------
 
-        path = []
+    def _belief_sum_in_disc(self, sector_idx: int, cx: float, cy: float, radius: float) -> float:
+        """Sum belief mass inside a circle centered at (cx, cy) with given radius."""
+        grid = self.belief[sector_idx]
+        left0, top0 = self.grid_origin[sector_idx]
+        nx, ny = self.grid_dims[sector_idx]
+        c = self.cell
+        r2 = radius * radius
 
-        if height >= width:
-            # Move along Y (vertical lanes), step across X by s
-            # Build lane abscissas
-            xs = [left + k * s for k in range(int(max(0, math.floor(width / s))) + 1)]
-            if xs[-1] < right - 1e-6:
-                xs.append(right)  # ensure last lane at the far edge
+        # bounding box in cell coordinates
+        x0 = max(0, int((cx - radius - left0) // c))
+        x1 = min(nx - 1, int((cx + radius - left0) // c))
+        y0 = max(0, int((cy - radius - top0) // c))
+        y1 = min(ny - 1, int((cy + radius - top0) // c))
 
-            toggle = False
-            for x in xs:
-                if not toggle:
-                    path.append(pygame.Vector2(x, top))
-                    path.append(pygame.Vector2(x, bottom))
-                else:
-                    path.append(pygame.Vector2(x, bottom))
-                    path.append(pygame.Vector2(x, top))
-                toggle = not toggle
+        total = 0.0
+        for jy in range(y0, y1 + 1):
+            cy_cell = top0 + (jy + 0.5) * c
+            dy2 = (cy_cell - cy) * (cy_cell - cy)
+            for ix in range(x0, x1 + 1):
+                cx_cell = left0 + (ix + 0.5) * c
+                dx = cx_cell - cx
+                if dx * dx + dy2 <= r2:
+                    total += grid[jy][ix]
+        return total
+
+    def _observation_update(self, sector_idx: int, cx: float, cy: float, radius: float):
+        """Reduce belief under the current FOV and renormalize; then apply simple diffusion."""
+        grid = self.belief[sector_idx]
+        left0, top0 = self.grid_origin[sector_idx]
+        nx, ny = self.grid_dims[sector_idx]
+        c = self.cell
+        r2 = radius * radius
+        detect = self.detect_strength
+
+        # 1) reduce where we looked
+        ssum = 0.0
+        for jy in range(ny):
+            cy_cell = top0 + (jy + 0.5) * c
+            dy2 = (cy_cell - cy) * (cy_cell - cy)
+            row = grid[jy]
+            for ix in range(nx):
+                cx_cell = left0 + (ix + 0.5) * c
+                dx = cx_cell - cx
+                if dx * dx + dy2 <= r2:
+                    row[ix] *= (1.0 - detect)
+                ssum += row[ix]
+
+        # 2) renormalize (avoid collapse)
+        if ssum <= 1e-12:
+            # reset to uniform if everything went to ~0
+            uniform = 1.0 / (nx * ny)
+            for jy in range(ny):
+                for ix in range(nx):
+                    grid[jy][ix] = uniform
+            ssum = 1.0
         else:
-            # Move along X (horizontal lanes), step across Y by s
-            ys = [top + k * s for k in range(int(max(0, math.floor(height / s))) + 1)]
-            if ys[-1] < bottom - 1e-6:
-                ys.append(bottom)
+            inv = 1.0 / ssum
+            for jy in range(ny):
+                row = grid[jy]
+                for ix in range(nx):
+                    row[ix] *= inv
 
-            toggle = False
-            for y in ys:
-                if not toggle:
-                    path.append(pygame.Vector2(left,  y))
-                    path.append(pygame.Vector2(right, y))
-                else:
-                    path.append(pygame.Vector2(right, y))
-                    path.append(pygame.Vector2(left,  y))
-                toggle = not toggle
+        # 3) diffusion (5-point stencil; small smoothing)
+        d = self.diffusion
+        if d > 0.0:
+            new_grid = [[0.0 for _ in range(nx)] for _ in range(ny)]
+            for jy in range(ny):
+                for ix in range(nx):
+                    center = grid[jy][ix]
+                    nsum = center
+                    cnt = 1
+                    if ix > 0:       nsum += grid[jy][ix - 1]; cnt += 1
+                    if ix < nx - 1:  nsum += grid[jy][ix + 1]; cnt += 1
+                    if jy > 0:       nsum += grid[jy - 1][ix]; cnt += 1
+                    if jy < ny - 1:  nsum += grid[jy + 1][ix]; cnt += 1
+                    avg = nsum / cnt
+                    new_grid[jy][ix] = (1.0 - d) * center + d * avg
+            # renormalize after diffusion
+            total = sum(sum(row) for row in new_grid)
+            inv = 1.0 / total
+            for jy in range(ny):
+                for ix in range(nx):
+                    new_grid[jy][ix] *= inv
+            self.belief[sector_idx] = new_grid
 
-        # Safety: degenerate case
-        if not path:
-            path = [pygame.Vector2((left + right) / 2, (top + bottom) / 2)]
+    # ---------- Monte Carlo target selection ----------
 
-        return path
+    def _replan_target(self, i: int):
+        """Sample K candidates; pick argmax(gain - lambda * distance)."""
+        safe = self.safe_rects[i]
+        if safe.width <= 1 or safe.height <= 1:
+            self.mc_target[i] = pygame.Vector2(safe.centerx, safe.centery)
+            self.replan_timer[i] = self.replan_T
+            return
+
+        best_score = -1e30
+        best_pt = None
+        cur = self.positions[i]
+        for _ in range(self.K):
+            x = self._rng.uniform(safe.left, safe.right)
+            y = self._rng.uniform(safe.top, safe.bottom)
+            gain = self._belief_sum_in_disc(i, x, y, self.fov_radius)
+            dist = math.hypot(x - cur.x, y - cur.y)
+            score = gain - self.cost_per_px * dist
+            if score > best_score:
+                best_score = score
+                best_pt = (x, y)
+
+        if best_pt is None:
+            best_pt = (safe.centerx, safe.centery)
+
+        self.mc_target[i] = pygame.Vector2(best_pt[0], best_pt[1])
+        self.replan_timer[i] = self.replan_T
 
     # ---------- drawing ----------
 
     def _draw_fov_circle(self, surface: pygame.Surface, center: pygame.Vector2):
-        # Clear temp surface (alpha)
         self._fov_surface.fill((0, 0, 0, 0))
-        # Draw translucent filled circle
-        color = (self.color[0], self.color[1], self.color[2], cs.fov_alpha)
+        color = (self.color[0], self.color[1], self.color[2], self.fov_alpha)
         pygame.draw.circle(self._fov_surface, color, (int(center.x), int(center.y)), int(self.fov_radius))
-        # Blit under the drone
         surface.blit(self._fov_surface, (0, 0))
 
+    def _draw_belief_heatmap(self, surface: pygame.Surface):
+        if not getattr(cs, "show_belief_heatmap", False):
+            return
+        overlay = pygame.Surface((cs.screen_width, cs.screen_height), pygame.SRCALPHA)
+        max_p = 0.0
+        for grid in self.belief:
+            for row in grid:
+                for p in row:
+                    if p > max_p: max_p = p
+        if max_p <= 0: return
+        amax = int(getattr(cs, "heatmap_alpha", 120))
+        for si, grid in enumerate(self.belief):
+            left0, top0 = self.grid_origin[si]
+            nx, ny = self.grid_dims[si]
+            for jy in range(ny):
+                for ix in range(nx):
+                    p = grid[jy][ix]
+                    # red-ish proportional to probability
+                    alpha = int(min(255, amax * (p / max_p)))
+                    if alpha <= 0: 
+                        continue
+                    rect = pygame.Rect(left0 + ix * self.cell, top0 + jy * self.cell, self.cell, self.cell)
+                    overlay.fill((255, 0, 0, alpha), rect)
+        surface.blit(overlay, (0, 0))
+
     def draw(self, surface):
-        # (Optional) visualize sector bounds
+        # Sector outlines
         for r in self.sectors:
             pygame.draw.rect(surface, cs.dgreen, r, 1)
-
-        # Optional: show sweep guides & safe rects
-        if getattr(cs, "show_sweep_guides", False):
-            guide_color = (255, 255, 255)
-            for path in self.sweep_paths:
-                for i in range(1, len(path)):
-                    pygame.draw.line(surface, guide_color,
-                                     (int(path[i - 1].x), int(path[i - 1].y)),
-                                     (int(path[i].x),     int(path[i].y)), 1)
-            for safe in self.safe_rects:
-                pygame.draw.rect(surface, (255, 255, 0), safe, 1)
-
-        # Draw FOV first (under the drones)
+        # Belief heatmap (optional)
+        self._draw_belief_heatmap(surface)
+        # FOV under drones
         for pos in self.positions:
             self._draw_fov_circle(surface, pos)
-
-        # Draw drones on top
+        # Drone bodies
         for pos in self.positions:
             pygame.draw.circle(surface, self.color, (int(pos.x), int(pos.y)), int(self.radius))
 
@@ -196,48 +285,53 @@ class Drone:
     def move(self, dt: float):
         # Smooth delay: consume leftover dt when delay ends this frame
         if self._elapsed < self.start_delay:
-            remaining = self.start_delay - self._elapsed
-            if dt <= remaining:
+            remain = self.start_delay - self._elapsed
+            if dt <= remain:
                 self._elapsed += dt
                 return
             else:
                 self._elapsed = self.start_delay
-                dt -= remaining  # use leftover time this frame
+                dt -= remain  # use leftover time this frame
 
         step = self.speed * dt
-        w, h = cs.screen_width, cs.screen_height
+        W, H = cs.screen_width, cs.screen_height
 
         for i in range(4):
             pos = self.positions[i]
 
-            # Approach to first strip entry (screen-clamped only to avoid snap)
-            if self.phase[i] == 0:
-                entry = self.sweep_paths[i][0]
-                new_pos = move_towards(pos, entry, step)
-                _screen_clamp(new_pos, self.fov_radius, w, h)
+            # First time we need a target: pick one
+            if self.phase[i] == 0 and self.mc_target[i] is None:
+                self._replan_target(i)
 
-                # enter sweeping once inside the safe rect
+            # Approach phase (only screen clamp to avoid snap), until we're inside safe rect
+            if self.phase[i] == 0:
+                entry = self.mc_target[i]
+                new_pos = move_towards(pos, entry, step)
+                _screen_clamp(new_pos, self.fov_radius, W, H)
                 if self.safe_rects[i].collidepoint(new_pos.x, new_pos.y):
                     self.phase[i] = 2
-                    self.current_wp_idx[i] = 1 if len(self.sweep_paths[i]) > 1 else 0
-
                 self.positions[i] = new_pos
+
+                # Observation & belief update at the new position
+                self._observation_update(i, self.positions[i].x, self.positions[i].y, self.fov_radius)
                 continue
 
-            # Sweeping (serpentine)
-            path = self.sweep_paths[i]
-            wp_i = self.current_wp_idx[i]
-            target = path[wp_i]
-
+            # Monte Carlo navigation inside sector
+            target = self.mc_target[i]
             new_pos = move_towards(pos, target, step)
             self.positions[i] = new_pos
 
-            # Advance waypoint on arrival; loop to rescan sector
-            if new_pos.distance_to(target) == 0:
-                self.current_wp_idx[i] = (wp_i + 1) % len(path)
-
-            # Clamp by FOV radius to keep coverage inside the sector
+            # Keep FOV inside sector
             r = self.sectors[i]
             m = self.fov_radius
             self.positions[i].x = max(r.left + m,  min(self.positions[i].x, r.right  - m))
             self.positions[i].y = max(r.top  + m,  min(self.positions[i].y, r.bottom - m))
+
+            # Observation & belief update at the new position
+            self._observation_update(i, self.positions[i].x, self.positions[i].y, self.fov_radius)
+
+            # Replan when we reach target or timer fires
+            self.replan_timer[i] -= dt
+            arrived = self.positions[i].distance_to(target) <= max(2.0, self.radius)
+            if arrived or self.replan_timer[i] <= 0.0:
+                self._replan_target(i)
