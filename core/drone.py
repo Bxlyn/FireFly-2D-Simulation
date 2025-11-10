@@ -19,13 +19,14 @@ def _screen_clamp(pos: pygame.Vector2, margin: float, w: int, h: int):
 
 def _sector_safe_rect(rect: pygame.Rect, margin: float) -> pygame.Rect:
     # shrink by FOV radius so the FOV circle stays inside
-    safe = rect.inflate(-2 * margin, -2 * margin)
-    # if FOV is huge, keep at least a point centered
-    if safe.width < 1 or safe.height < 1:
-        cx, cy = rect.center
-        safe.width = max(1, safe.width)
-        safe.height = max(1, safe.height)
-        safe.center = (cx, cy)
+    left   = rect.left   + margin
+    right  = rect.right  - margin
+    top    = rect.top    + margin
+    bottom = rect.bottom - margin
+    # repair if FOV is huge
+    if right < left:   left, right   = right, left
+    if bottom < top:   top, bottom   = bottom, top
+    safe = pygame.Rect(int(left), int(top), int(right - left), int(bottom - top))
     return safe
 
 # ---------- drone ----------
@@ -35,9 +36,10 @@ class Drone:
     4 drones:
       - spawn spaced inside compost (one per compost quadrant)
       - go to sector entry
-      - sweep sector in parallel tracks (boustrophedon) using FOV circle radius
+      - sweep sector with optimal parallel strips (spacing s = 2*r * factor, factor<=1)
+      - orientation chosen along the LONGER side to minimize turns/overhead
       - motion clamped by FOV radius so coverage stays inside each sector
-      - smooth start after delay (no first-frame snap)
+      - smooth start after delay (consumes leftover dt)
     """
     def __init__(self, x, y, speed, *, start_delay, compost=None):
         # Visual/body
@@ -47,9 +49,12 @@ class Drone:
         # FOV circle parameters (vertical FOV)
         self.fov_angle = float(cs.fov_angle_deg)
         self.altitude = float(cs.altitude_px)
-        # footprint radius from vertical FOV
         self.fov_radius = self.altitude * math.tan(math.radians(self.fov_angle / 2.0))
         self.fov_alpha = int(cs.fov_alpha)
+
+        # Optimal strip spacing (exact 2r with optional tiny overlap)
+        self.opt_stride_factor = float(getattr(cs, "opt_stride_factor", 1.0))
+        self.strip_spacing = max(1.0, 2.0 * self.fov_radius * self.opt_stride_factor)
 
         self.speed = float(speed)  # units/sec
 
@@ -71,9 +76,12 @@ class Drone:
             pygame.Rect(0,      h // 2, w // 2, h // 2),  # 2: BL
             pygame.Rect(w // 2, h // 2, w // 2, h // 2),  # 3: BR
         ]
+
+        # Safe rects (FOV-contained)
+        self.safe_rects = [_sector_safe_rect(r, self.fov_radius) for r in self.sectors]
         self.sector_centers = [pygame.Vector2(r.center) for r in self.sectors]
 
-        # spawn four drones around a ring inside the compost (one per slice)
+        # Spawn four drones around a ring inside the compost (one per slice)
         spawn_ring = max(self.radius + 4, min(compost_radius - self.radius - 4, compost_radius * 0.66))
         spawn_angles = [135, 45, 225, 315]  # TL, TR, BL, BR (match sectors)
         self.positions = []
@@ -81,69 +89,72 @@ class Drone:
             offset = pygame.Vector2(spawn_ring, 0).rotate(ang)
             self.positions.append(self.world_center + offset)
 
-        # state per drone
-        # phase: 0 delay/approach, 2 sweeping (we skip a separate 1 to keep it simple)
+        # State per drone
+        # phase: 0 delay/approach, 2 sweeping
         self.phase = [0] * 4
         self.current_wp_idx = [0] * 4
         self.start_delay = float(start_delay)
         self._elapsed = 0.0
 
-        # sweep paths and safe rects
+        # Build optimal (orientation-aware) sweep paths for each sector
         self.sweep_paths = []
-        for r in self.sectors:
-            self.sweep_paths.append(self._build_sweep_path(r))
-
-        self.safe_rects = [_sector_safe_rect(r, self.fov_radius) for r in self.sectors]
+        for safe in self.safe_rects:
+            self.sweep_paths.append(self._build_optimal_sweep_path(safe))
 
         # Pre-allocate alpha surface for FOV (screen-sized; one blit per drone)
         self._fov_surface = pygame.Surface((w, h), pygame.SRCALPHA)
 
-    # ---------- path generation ----------
+    # ---------- path generation (optimal parallel strips) ----------
 
-    def _build_sweep_path(self, rect: pygame.Rect):
+    def _build_optimal_sweep_path(self, safe: pygame.Rect):
         """
-        Create left-right & right-left tracks that fill the rect,
-        keeping the FOV disk fully inside (inset by fov_radius).
-        Vertical spacing (stride) derived from fov_radius.
+        Parallel-strip coverage with spacing s = 2r * factor (factor<=1),
+        oriented along the LONGER side of the safe rect.
         """
-        inset = self.fov_radius + 4
-        left   = rect.left   + inset
-        right  = rect.right  - inset
-        top    = rect.top    + inset
-        bottom = rect.bottom - inset
+        left, top, width, height = float(safe.left), float(safe.top), float(safe.width), float(safe.height)
+        right  = left + width
+        bottom = top  + height
+        s = self.strip_spacing
 
-        # Guard against extreme FOVs
-        if left > right:  left, right = right, left
-        if top > bottom:  top, bottom = bottom, top
-
-        # stride between adjacent scanlines
-        stride = self.fov_radius * math.sqrt(2) * float(getattr(cs, "sweep_stride_factor", 0.9))
-        stride = max(6.0, stride)  # sane minimum
-
-        y = top
         path = []
-        toggle = False  # False => L->R, True => R->L
 
-        while y <= bottom:
-            if not toggle:
-                path.append(pygame.Vector2(left,  y))
-                path.append(pygame.Vector2(right, y))
-            else:
-                path.append(pygame.Vector2(right, y))
-                path.append(pygame.Vector2(left,  y))
-            y += stride
-            toggle = not toggle
+        if height >= width:
+            # Move along Y (vertical lanes), step across X by s
+            # Build lane abscissas
+            xs = [left + k * s for k in range(int(max(0, math.floor(width / s))) + 1)]
+            if xs[-1] < right - 1e-6:
+                xs.append(right)  # ensure last lane at the far edge
 
-        # Ensure a final pass at bottom if needed
-        if len(path) >= 2 and path[-1].y < bottom:
-            if not toggle:
-                path.append(pygame.Vector2(left,  bottom))
-                path.append(pygame.Vector2(right, bottom))
-            else:
-                path.append(pygame.Vector2(right, bottom))
-                path.append(pygame.Vector2(left,  bottom))
+            toggle = False
+            for x in xs:
+                if not toggle:
+                    path.append(pygame.Vector2(x, top))
+                    path.append(pygame.Vector2(x, bottom))
+                else:
+                    path.append(pygame.Vector2(x, bottom))
+                    path.append(pygame.Vector2(x, top))
+                toggle = not toggle
+        else:
+            # Move along X (horizontal lanes), step across Y by s
+            ys = [top + k * s for k in range(int(max(0, math.floor(height / s))) + 1)]
+            if ys[-1] < bottom - 1e-6:
+                ys.append(bottom)
 
-        return path if path else [pygame.Vector2((left + right) / 2, (top + bottom) / 2)]
+            toggle = False
+            for y in ys:
+                if not toggle:
+                    path.append(pygame.Vector2(left,  y))
+                    path.append(pygame.Vector2(right, y))
+                else:
+                    path.append(pygame.Vector2(right, y))
+                    path.append(pygame.Vector2(left,  y))
+                toggle = not toggle
+
+        # Safety: degenerate case
+        if not path:
+            path = [pygame.Vector2((left + right) / 2, (top + bottom) / 2)]
+
+        return path
 
     # ---------- drawing ----------
 
@@ -151,7 +162,7 @@ class Drone:
         # Clear temp surface (alpha)
         self._fov_surface.fill((0, 0, 0, 0))
         # Draw translucent filled circle
-        color = (self.color[0], self.color[1], self.color[2], self.fov_alpha)
+        color = (self.color[0], self.color[1], self.color[2], cs.fov_alpha)
         pygame.draw.circle(self._fov_surface, color, (int(center.x), int(center.y)), int(self.fov_radius))
         # Blit under the drone
         surface.blit(self._fov_surface, (0, 0))
@@ -161,7 +172,7 @@ class Drone:
         for r in self.sectors:
             pygame.draw.rect(surface, cs.dgreen, r, 1)
 
-        # Optional: sweep guides & safe rects
+        # Optional: show sweep guides & safe rects
         if getattr(cs, "show_sweep_guides", False):
             guide_color = (255, 255, 255)
             for path in self.sweep_paths:
@@ -191,7 +202,7 @@ class Drone:
                 return
             else:
                 self._elapsed = self.start_delay
-                dt -= remaining  # use the leftover time this frame
+                dt -= remaining  # use leftover time this frame
 
         step = self.speed * dt
         w, h = cs.screen_width, cs.screen_height
@@ -199,15 +210,13 @@ class Drone:
         for i in range(4):
             pos = self.positions[i]
 
-            # Approach phase (to first sweep entry point), using screen clamp only
+            # Approach to first strip entry (screen-clamped only to avoid snap)
             if self.phase[i] == 0:
                 entry = self.sweep_paths[i][0]
                 new_pos = move_towards(pos, entry, step)
-
-                # avoid first-frame snap: only screen clamp here
                 _screen_clamp(new_pos, self.fov_radius, w, h)
 
-                # enter sweeping once inside sector's safe rect
+                # enter sweeping once inside the safe rect
                 if self.safe_rects[i].collidepoint(new_pos.x, new_pos.y):
                     self.phase[i] = 2
                     self.current_wp_idx[i] = 1 if len(self.sweep_paths[i]) > 1 else 0
@@ -215,7 +224,7 @@ class Drone:
                 self.positions[i] = new_pos
                 continue
 
-            # Sweeping phase
+            # Sweeping (serpentine)
             path = self.sweep_paths[i]
             wp_i = self.current_wp_idx[i]
             target = path[wp_i]
@@ -227,7 +236,7 @@ class Drone:
             if new_pos.distance_to(target) == 0:
                 self.current_wp_idx[i] = (wp_i + 1) % len(path)
 
-            # Clamp by FOV radius to keep full coverage inside the sector
+            # Clamp by FOV radius to keep coverage inside the sector
             r = self.sectors[i]
             m = self.fov_radius
             self.positions[i].x = max(r.left + m,  min(self.positions[i].x, r.right  - m))

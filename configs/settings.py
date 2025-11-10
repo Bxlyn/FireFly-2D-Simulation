@@ -26,6 +26,8 @@ fov_alpha = 70       # transparency of FOV disk
 # Sweep coverage controls
 sweep_stride_factor = 0.9  # 0.7..1.0 (smaller = more overlap between tracks)
 show_sweep_guides = False  # True to draw the sweep lines for debugging
+opt_stride_factor = 0.98
+
 # Compost
 cradius = 48
 
