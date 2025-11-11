@@ -33,6 +33,12 @@ mc_diffusion = 0.06         # probability diffusion per update (0..1). 0=static,
 show_belief_heatmap = False # overlay heatmap (can be slow)
 heatmap_alpha = 120         # heatmap opacity (0..255)
 
+# --- Duty cycle (periodic recharge) ---
+duty_work_seconds = 25.0     # time away from base before returning
+duty_recharge_seconds = 3.0  # 2..5 seconds typical recharge dwell time
+duty_jitter_frac = 0.25      # ±25% jitter so drones don't all return together
+
+
 # Compost
 cradius = 48
 
