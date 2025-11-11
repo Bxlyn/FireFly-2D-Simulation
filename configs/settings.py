@@ -10,6 +10,10 @@ dgreen4 = (6, 64, 43)
 forestgreen = (34, 139, 34)
 blue = (0, 0, 255)
 cyellow = (150, 100, 50)
+battery_low_color     = (220, 70, 60)
+battery_med_color     = (230, 200, 40)
+battery_high_color    = (60, 200, 90)
+hud_text_color        = (240, 240, 240)
 
 # Drones
 startX = 640
@@ -38,6 +42,15 @@ duty_work_seconds = 25.0     # time away from base before returning
 duty_recharge_seconds = 3.0  # 2..5 seconds typical recharge dwell time
 duty_jitter_frac = 0.25      # ±25% jitter so drones don't all return together
 
+# --- Battery HUD (all optional; defaults are used if omitted) ---
+show_battery_hud     = True   # master switch
+battery_world_bars   = True   # tiny bar above each drone
+battery_panel        = True   # top-left panel with bars & labels
+battery_panel_pos    = (12, 12)
+battery_panel_width  = 240
+battery_bar_h        = 10
+battery_low_threshold = 0.20  # red below 20%
+battery_med_threshold = 0.50  # yellow between 20%..50%
 
 # Compost
 cradius = 48

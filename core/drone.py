@@ -28,16 +28,15 @@ def _sector_safe_rect(rect: pygame.Rect, margin: float) -> pygame.Rect:
     if bottom < top:   top, bottom = bottom, top
     return pygame.Rect(int(left), int(top), int(right - left), int(bottom - top))
 
-# ---------- drone (Monte Carlo search + periodic recharge) ----------
+# ---------- drone (Monte Carlo search + periodic recharge + battery HUD) ----------
 
 class Drone:
     """
     4 drones (one per quadrant):
-      - maintain a belief grid over their sector
-      - Monte Carlo selects next waypoint: argmax(expected_gain - travel_cost)
-      - periodically RETURN to compost and RECHARGE for a few seconds
-      - smooth start after compost delay (consumes leftover dt)
-      - FOV circle drawn; search clamped by FOV inside sector; travel clamped to screen
+      - Monte Carlo search on a belief grid
+      - periodic RETURN to compost and RECHARGE for a few seconds
+      - battery HUD (bar above each drone + top-left panel) with animated recharge
+      - smooth start after compost delay; FOV circle drawn
     """
 
     # States
@@ -52,8 +51,8 @@ class Drone:
         self.color = cs.blue
 
         # FOV circle parameters (vertical FOV)
-        self.fov_angle = float(cs.fov_angle_deg)
-        self.altitude  = float(cs.altitude_px)
+        self.fov_angle  = float(cs.fov_angle_deg)
+        self.altitude   = float(cs.altitude_px)
         self.fov_radius = self.altitude * math.tan(math.radians(self.fov_angle / 2.0))
         self.fov_alpha  = int(cs.fov_alpha)
 
@@ -66,9 +65,23 @@ class Drone:
         self.diffusion       = float(getattr(cs, "mc_diffusion", 0.06))
 
         # Duty cycle (recharge)
-        self.work_T     = float(getattr(cs, "duty_work_seconds", 25.0))
-        self.charge_T   = float(getattr(cs, "duty_recharge_seconds", 3.0))  # 2..5s suggested
-        self.jitter_frac= float(getattr(cs, "duty_jitter_frac", 0.25))
+        self.work_T      = float(getattr(cs, "duty_work_seconds", 25.0))
+        self.charge_T    = float(getattr(cs, "duty_recharge_seconds", 3.0))  # 2..5s ok
+        self.jitter_frac = float(getattr(cs, "duty_jitter_frac", 0.25))
+
+        # HUD toggles & style
+        self._show_hud        = bool(getattr(cs, "show_battery_hud", True))
+        self._show_world_bars = bool(getattr(cs, "battery_world_bars", True))
+        self._show_panel      = bool(getattr(cs, "battery_panel", True))
+        self._panel_pos       = tuple(getattr(cs, "battery_panel_pos", (12, 12)))
+        self._panel_w         = int(getattr(cs, "battery_panel_width", 240))
+        self._bar_h           = int(getattr(cs, "battery_bar_h", 10))
+        self._t_low           = float(getattr(cs, "battery_low_threshold", 0.20))
+        self._t_med           = float(getattr(cs, "battery_med_threshold", 0.50))
+        self._c_low           = tuple(getattr(cs, "battery_low_color",  (220, 70, 60)))
+        self._c_med           = tuple(getattr(cs, "battery_med_color",  (230, 200, 40)))
+        self._c_high          = tuple(getattr(cs, "battery_high_color", (60, 200, 90)))
+        self._c_text          = tuple(getattr(cs, "hud_text_color",     (240, 240, 240)))
 
         self.speed = float(speed)  # px/sec
 
@@ -97,27 +110,29 @@ class Drone:
         self.safe_rects = [_sector_safe_rect(r, self.fov_radius) for r in self.sectors]
 
         # Spawn four drones spaced inside compost (one per compost slice)
-        spawn_ring = max(self.radius + 4, min(self.base_radius - self.radius - 4, self.base_radius * 0.66))
-        spawn_angles = [135, 45, 225, 315]  # TL, TR, BL, BR
+        spawn_ring    = max(self.radius + 4, min(self.base_radius - self.radius - 4, self.base_radius * 0.66))
+        spawn_angles  = [135, 45, 225, 315]  # TL, TR, BL, BR
         self.positions = []
         for ang in spawn_angles:
             offset = pygame.Vector2(spawn_ring, 0).rotate(ang)
             self.positions.append(self.world_center + offset)
 
         # State per drone
-        self.phase          = [self.APPROACH] * 4
-        self.mc_target      = [None] * 4
-        self.replan_timer   = [0.0] * 4
-        self.start_delay    = float(start_delay)
-        self._elapsed       = 0.0
+        self.phase         = [self.APPROACH] * 4
+        self.mc_target     = [None] * 4
+        self.replan_timer  = [0.0] * 4
+        self.start_delay   = float(start_delay)
+        self._elapsed      = 0.0
 
-        # Duty cycle timers (start with jitter so drones don't stack)
+        # Battery model (time-based)
         self._rng = random.Random(1337)
         def jittered_work():
             j = 1.0 + self.jitter_frac * (2.0 * self._rng.random() - 1.0)  # in [1-j, 1+j]
             return max(2.0, self.work_T * j)
-        self.work_remaining  = [jittered_work() for _ in range(4)]
-        self.recharge_timer  = [0.0] * 4
+
+        self.work_period   = [jittered_work() for _ in range(4)]   # full duration when battery=100%
+        self.work_remaining= [p for p in self.work_period]         # counts down while away
+        self.recharge_timer= [0.0] * 4                             # counts down while charging
 
         # Belief grids (one per sector, uniform init)
         self.grid_origin = []   # (left, top) per sector
@@ -133,8 +148,26 @@ class Drone:
             self.grid_origin.append((left, top))
             self.grid_dims.append((nx, ny))
 
-        # Alpha surface for semi-transparent FOV circles
+        # Surfaces / font
         self._fov_surface = pygame.Surface((w, h), pygame.SRCALPHA)
+        self._font = pygame.font.Font(None, 16)
+
+    # ---------- battery helpers ----------
+
+    def _battery_frac(self, i: int) -> float:
+        """0..1 fraction of battery for HUD."""
+        if self.phase[i] == self.RECHARGE:
+            # animate fill while charging
+            if self.charge_T <= 1e-6: return 1.0
+            return max(0.0, min(1.0, 1.0 - self.recharge_timer[i] / self.charge_T))
+        # away from base: show remaining fraction
+        if self.work_period[i] <= 1e-6: return 0.0
+        return max(0.0, min(1.0, self.work_remaining[i] / self.work_period[i]))
+
+    def _battery_color(self, f: float):
+        if f <= self._t_low:  return self._c_low
+        if f <= self._t_med:  return self._c_med
+        return self._c_high
 
     # ---------- belief utilities ----------
 
@@ -162,7 +195,6 @@ class Drone:
         return total
 
     def _observation_update(self, sector_idx: int, cx: float, cy: float, radius: float):
-        # Reduce belief under current FOV, renormalize, then diffuse
         grid = self.belief[sector_idx]
         left0, top0 = self.grid_origin[sector_idx]
         nx, ny = self.grid_dims[sector_idx]
@@ -275,22 +307,76 @@ class Drone:
                     overlay.fill((255, 0, 0, alpha), rect)
         surface.blit(overlay, (0, 0))
 
+    def _draw_battery_world_bars(self, surface: pygame.Surface):
+        if not (self._show_hud and self._show_world_bars): return
+        w = 46
+        h = 6
+        for i, pos in enumerate(self.positions):
+            f = self._battery_frac(i)
+            col = self._battery_color(f)
+            x = int(pos.x - w // 2)
+            y = int(pos.y - self.radius - 10 - h)
+            # frame
+            pygame.draw.rect(surface, (10, 10, 10), (x - 1, y - 1, w + 2, h + 2), border_radius=2)
+            # fill background
+            pygame.draw.rect(surface, (40, 40, 40), (x, y, w, h), border_radius=2)
+            # fill value
+            pygame.draw.rect(surface, col, (x, y, int(w * f), h), border_radius=2)
+
+    def _draw_battery_panel(self, surface: pygame.Surface):
+        if not (self._show_hud and self._show_panel): return
+        x0, y0 = self._panel_pos
+        W = self._panel_w
+        pad = 8
+        rows = 4
+        row_h = max(self._bar_h + 10, 18)
+        H = pad * 2 + rows * row_h
+
+        panel = pygame.Surface((W, H), pygame.SRCALPHA)
+        panel.fill((20, 20, 20, 180))  # semi-transparent
+
+        labels = ["TL", "TR", "BL", "BR"]
+        state_txt = { self.APPROACH:"APP", self.SEARCH:"SRCH", self.RETURN:"RET", self.RECHARGE:"CHG" }
+
+        for i in range(4):
+            y = pad + i * row_h
+            # label + state
+            txt = f"{labels[i]} {state_txt.get(self.phase[i], '?')}"
+            srf = self._font.render(txt, True, self._c_text)
+            panel.blit(srf, (8, y + 1))
+
+            # bar
+            bx = 60
+            bw = W - bx - 12
+            by = y + (row_h - self._bar_h) // 2
+            f = self._battery_frac(i)
+            col = self._battery_color(f)
+            pygame.draw.rect(panel, (40, 40, 40), (bx, by, bw, self._bar_h), border_radius=2)
+            pygame.draw.rect(panel, col, (bx, by, int(bw * f), self._bar_h), border_radius=2)
+
+            # percent text
+            pct = int(round(100 * f))
+            psrf = self._font.render(f"{pct}%", True, self._c_text)
+            panel.blit(psrf, (bx + bw - psrf.get_width() - 2, by - 1))
+
+        surface.blit(panel, (x0, y0))
+
     def draw(self, surface):
         # Sector outlines
         for r in self.sectors:
             pygame.draw.rect(surface, cs.dgreen, r, 1)
-
         # Belief heatmap (optional)
         self._draw_belief_heatmap(surface)
-
         # FOV under drones
         for pos in self.positions:
             self._draw_fov_circle(surface, pos)
-
         # Drone bodies (yellow while recharging)
         for i, pos in enumerate(self.positions):
             color = cs.cyellow if self.phase[i] == self.RECHARGE else self.color
             pygame.draw.circle(surface, color, (int(pos.x), int(pos.y)), int(self.radius))
+        # Battery HUD
+        self._draw_battery_world_bars(surface)
+        self._draw_battery_panel(surface)
 
     # ---------- update ----------
 
@@ -317,10 +403,13 @@ class Drone:
                 self.positions[i] = self.base_center.copy()
                 self.recharge_timer[i] -= dt
                 if self.recharge_timer[i] <= 0.0:
-                    # reset duty cycle & plan a new target
-                    self.work_remaining[i] = max(2.0, self.work_T * (1.0 + self.jitter_frac * (2.0 * random.random() - 1.0)))
-                    self.mc_target[i] = None
-                    self.phase[i] = self.APPROACH
+                    # tank full → reset work period, battery, plan new target
+                    # (jitter so they don't all launch together)
+                    wp = max(2.0, self.work_T * (1.0 + self.jitter_frac * (2.0 * random.random() - 1.0)))
+                    self.work_period[i]    = wp
+                    self.work_remaining[i] = wp
+                    self.mc_target[i]      = None
+                    self.phase[i]          = self.APPROACH
                 # No belief update while docked
                 continue
 
@@ -335,15 +424,13 @@ class Drone:
                 _screen_clamp(new_pos, self.fov_radius, W, H)
                 self.positions[i] = new_pos
 
-                # Optionally still update belief where we fly through
+                # (Optional) observation while flying home
                 self._observation_update(i, new_pos.x, new_pos.y, self.fov_radius)
 
                 # Arrived at compost?
                 if new_pos.distance_to(self.base_center) <= max(1.0, self.base_radius - self.radius):
                     self.phase[i] = self.RECHARGE
-                    # 2..5 seconds per your requirement; use setting if present
-                    dwell = self.charge_T
-                    self.recharge_timer[i] = dwell
+                    self.recharge_timer[i] = self.charge_T
                 continue
 
             # ----- APPROACH (into sector safe area) -----
@@ -352,14 +439,17 @@ class Drone:
                 new_pos = move_towards(pos, entry, step)
                 _screen_clamp(new_pos, self.fov_radius, W, H)
                 self.positions[i] = new_pos
-                # Observation during transit
+
+                # observation during transit
                 self._observation_update(i, new_pos.x, new_pos.y, self.fov_radius)
-                # Enter SEARCH when inside safe rect
+
+                # enter SEARCH when inside safe rect
                 if self.safe_rects[i].collidepoint(new_pos.x, new_pos.y):
                     self.phase[i] = self.SEARCH
                     self.replan_timer[i] = self.replan_T
-                # Battery counts down while away from base
-                self.work_remaining[i] -= dt
+
+                # drain battery while away
+                self.work_remaining[i] = max(0.0, self.work_remaining[i] - dt)
                 if self.work_remaining[i] <= 0.0:
                     self.phase[i] = self.RETURN
                     self.mc_target[i] = None
@@ -386,8 +476,8 @@ class Drone:
                 if arrived or self.replan_timer[i] <= 0.0:
                     self._replan_target(i)
 
-                # Battery counts down; return when empty
-                self.work_remaining[i] -= dt
+                # drain battery while away; return when empty
+                self.work_remaining[i] = max(0.0, self.work_remaining[i] - dt)
                 if self.work_remaining[i] <= 0.0:
                     self.phase[i] = self.RETURN
                     self.mc_target[i] = None
