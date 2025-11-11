@@ -51,6 +51,8 @@ battery_panel_width  = 240
 battery_bar_h        = 10
 battery_low_threshold = 0.20  # red below 20%
 battery_med_threshold = 0.50  # yellow between 20%..50%
+battery_return_threshold = 0.20
+battery_reserve_seconds  = 3.0
 
 # Compost
 cradius = 48
