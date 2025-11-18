@@ -1,62 +1,131 @@
-# Screen dimensions
-screen_width = 1280
+# =========================
+# configs/settings.py
+# =========================
+
+# --- Screen ---
+screen_width  = 1280
 screen_height = 720
+fps           = 60
 
-# Colors
-dgreen = (0, 100, 0)
-dgreen2 = (1, 50, 32)
-dgreen3 = (2, 48, 32)
-dgreen4 = (6, 64, 43)
+# --- Colors ---
+dgreen      = (0, 100, 0)
+dgreen2     = (1, 50, 32)
+dgreen3     = (2, 48, 32)
+dgreen4     = (6, 64, 43)
 forestgreen = (34, 139, 34)
-blue = (0, 0, 255)
-cyellow = (150, 100, 50)
-battery_low_color     = (220, 70, 60)
-battery_med_color     = (230, 200, 40)
-battery_high_color    = (60, 200, 90)
-hud_text_color        = (240, 240, 240)
+blue        = (0, 0, 255)
+cyellow     = (150, 100, 50)
 
-# Drones
-startX = 640
-startY = 360
-speed = 80
-start_delay = 2
-drone_radius = 7     # body draw radius (px)
+# HUD colors
+battery_low_color   = (220, 70, 60)
+battery_med_color   = (230, 200, 40)
+battery_high_color  = (60, 200, 90)
+hud_text_color      = (240, 240, 240)
 
-# Vertical FOV (downward-looking)
-fov_angle_deg = 90   # 80–100 realistic
-altitude_px = 90     # bigger => bigger FOV footprint
-fov_alpha = 70       # transparency of FOV disk
+# --- Drones ---
+startX        = 640
+startY        = 360
+speed         = 80          # px/s
+start_delay   = 2           # s
+drone_radius  = 7           # body draw radius (px)
 
-#Monte-Carlo
-mc_cell_px = 16            # grid cell size. 12-24 is typical; smaller = finer belief, slower
-mc_candidates = 60         # random candidates sampled per replan
-mc_replan_seconds = 0.7    # how often to resample targets if we haven't arrived
-mc_cost_per_px = 0.0008    # travel cost weight in utility (probability units per pixel)
-mc_detect_strength = 0.85   # fraction removed from belief inside FOV each observation
-mc_diffusion = 0.06         # probability diffusion per update (0..1). 0=static, 0.05-0.1=gentle drift
-show_belief_heatmap = False # overlay heatmap (can be slow)
-heatmap_alpha = 120         # heatmap opacity (0..255)
+# Vertical FOV (downward-looking footprint)
+fov_angle_deg = 90
+altitude_px   = 90
+fov_alpha     = 70
 
-# --- Duty cycle (periodic recharge) ---
-duty_work_seconds = 25.0     # time away from base before returning
-duty_recharge_seconds = 3.0  # 2..5 seconds typical recharge dwell time
-duty_jitter_frac = 0.25      # ±25% jitter so drones don't all return together
+# --- Monte-Carlo routing (belief-driven) ---
+mc_cell_px          = 16
+mc_candidates       = 60
+mc_replan_seconds   = 0.7
+mc_cost_per_px      = 0.0008
+mc_detect_strength  = 0.85
+mc_diffusion        = 0.06
+show_belief_heatmap = False
+heatmap_alpha       = 120
 
-# --- Battery HUD (all optional; defaults are used if omitted) ---
-show_battery_hud     = True   # master switch
-battery_world_bars   = True   # tiny bar above each drone
-battery_panel        = True   # top-left panel with bars & labels
-battery_panel_pos    = (12, 12)
-battery_panel_width  = 240
-battery_bar_h        = 10
-battery_low_threshold = 0.20  # red below 20%
-battery_med_threshold = 0.50  # yellow between 20%..50%
+# --- Duty cycle & battery/RTB ---
+duty_work_seconds      = 25.0
+duty_recharge_seconds  = 3.0
+duty_jitter_frac       = 0.25
+show_battery_hud       = True
+battery_world_bars     = True
+battery_panel          = True
+battery_panel_pos      = (12, 12)
+battery_panel_width    = 240
+battery_bar_h          = 10
+battery_low_threshold  = 0.20
+battery_med_threshold  = 0.50
 battery_return_threshold = 0.20
 battery_reserve_seconds  = 3.0
 
-# Compost
-cradius = 48
+# --- Fire (CA + Rothermel-inspired) ---
+fire_cell_px         = 8
+fire_rng_seed        = 2024
 
-# Misc
-fire = 2.5
-fps = 60
+# Keep spread moderate for demo
+fire_ros_scale       = 0.5
+fire_base_ros_pxps   = 8.0
+fire_k_ignite        = 0.6
+
+# Wind (0°→, 90°↓)
+fire_wind_speed      = 8.0
+fire_wind_dir_deg    = 25.0
+fire_c_w             = 0.045
+fire_b_w             = 1.4
+
+# Slope
+fire_slope_deg       = 5.0
+fire_slope_dir_deg   = 180.0
+fire_c_s             = 0.08
+fire_b_s             = 2.0
+
+# Fuel / moisture
+fire_moisture_live   = 0.18
+fire_moisture_ext    = 0.35
+fire_fuel_mean       = 1.0
+fire_fuel_var        = 0.25
+
+# Burn timing
+fire_burn_duration   = 18.0
+
+# Barriers / spotting
+fire_barrier_density = 0.01
+fire_spot_chance     = 0.0002
+fire_spot_max_cells  = 10
+
+# Visuals
+fire_show_grid       = False
+fire_alpha_fire      = 175
+fire_draw_smoke      = False
+fire_show_zone_ring  = False   # <— do NOT draw suppression ring
+
+# --- Detection (deterministic, debounced) ---
+det_min_frac       = 0.010   # ≥ 1% of FOV burning
+det_confirm_time   = 0.50    # must persist ≥ this time
+det_cooldown_s     = 3.0
+det_false_pos      = 0.0
+marker_ttl         = 4.0
+
+# --- Incident tracking & suppression ---
+incident_merge_radius_px    = 100
+incident_monitor_radius_px  = 140
+incident_suppress_radius_px = 90
+stop_after_detect_delay     = 2.0     # delay before suppression starts
+suppress_grow_speed_pxps    = 160.0   # if you keep a zone, it can grow (not visualized)
+quench_burn_boost           = 6.0     # faster fade inside suppressed fire
+
+# IMPORTANT: keep these zero so suppression is TEMPORARY (area can re-ignite later)
+suppress_wet                = 0.0
+suppress_fuel_reduction     = 0.0
+suppress_extinguish         = False   # not instant kill; smooth out
+
+# Burned area “recovers” so future fires can start again here
+fire_burned_regen_seconds   = 25.0    # after this, BURNED -> UNBURNED with fresh fuel
+
+# --- Demo knobs (main.py may use these) ---
+bg_ignitions_per_s     = 0.004
+click_ignite_radius_px = 10
+
+# --- Station (compost) ---
+cradius = 48
