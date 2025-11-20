@@ -127,5 +127,10 @@ fire_burned_regen_seconds   = 25.0    # after this, BURNED -> UNBURNED with fres
 bg_ignitions_per_s     = 0.004
 click_ignite_radius_px = 10
 
+# --- Under-drone incident coordinates label ---
+show_incident_coords = True                 # master toggle
+incident_coords_color = (240, 240, 240)     # text color
+incident_coords_bg    = (20, 20, 20, 180)   # background pill (RGBA)
+
 # --- Station (compost) ---
 cradius = 48

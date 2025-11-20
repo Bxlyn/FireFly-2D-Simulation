@@ -77,6 +77,12 @@ class Drone:
         self._c_high          = tuple(getattr(cs, "battery_high_color", (60, 200, 90)))
         self._c_text          = tuple(getattr(cs, "hud_text_color",     (240, 240, 240)))
 
+        # Incident coordinates HUD under drone
+        self._show_incident_coords = bool(getattr(cs, "show_incident_coords", True))
+        self._coord_text_color = tuple(getattr(cs, "incident_coords_color", self._c_text))
+        self._coord_bg_color   = tuple(getattr(cs, "incident_coords_bg", (20, 20, 20, 180)))
+        self._last_incident_pos = [None] * 4  # (x, y) recorded at detection time
+
         # Fire sim reference
         self.fire = fire_sim
 
@@ -300,6 +306,8 @@ class Drone:
             if len(self._alerts) > self._max_alerts: self._alerts.pop()
             self._markers.append({"pos": pygame.Vector2(cx, cy), "ttl": self._marker_ttl})
 
+            self._last_incident_pos[i] = (cx, cy)
+
             # HOLD until that cluster is fully gone
             self.phase[i] = self.HOLD
             self._holding_incident[i] = inc_id
@@ -310,6 +318,33 @@ class Drone:
         color = (self.color[0], self.color[1], self.color[2], self.fov_alpha)
         pygame.draw.circle(self._fov_surface, color, (int(center.x), int(center.y)), int(self.fov_radius))
         surface.blit(self._fov_surface, (0, 0))
+
+    
+    def _draw_incident_coords_under_drones(self, surface: pygame.Surface):
+        """Show '(x,y)' of the detected fire under the drone while in HOLD."""
+        if not self._show_incident_coords:
+            return
+        for i, pos in enumerate(self.positions):
+            if self.phase[i] != self.HOLD:
+                continue
+            xy = self._last_incident_pos[i]
+            if not xy:
+                continue
+            text = f"FIRE {int(xy[0])}, {int(xy[1])}"
+            srf  = self._font.render(text, True, self._coord_text_color)
+
+            # pill background (semi-transparent)
+            pad_x, pad_y = 6, 3
+            w, h = srf.get_width(), srf.get_height()
+            x = int(pos.x - (w + 2 * pad_x) // 2)
+            y = int(pos.y + self.radius + 8)
+
+            bg = pygame.Surface((w + 2 * pad_x, h + 2 * pad_y), pygame.SRCALPHA)
+            bg_col = self._coord_bg_color if len(self._coord_bg_color) == 4 else (*self._coord_bg_color, 180)
+            bg.fill(bg_col)
+            surface.blit(bg, (x, y))
+            surface.blit(srf, (x + pad_x, y + pad_y))
+
 
     def _draw_battery_world_bars(self, surface: pygame.Surface):
         if not (self._show_hud and self._show_world_bars): return
@@ -383,6 +418,7 @@ class Drone:
         for i, pos in enumerate(self.positions):
             color = cs.cyellow if self.phase[i] == self.RECHARGE else self.color
             pygame.draw.circle(surface, color, (int(pos.x), int(pos.y)), int(self.radius))
+        self._draw_incident_coords_under_drones(surface)
         self._draw_detection_markers(surface, dt_since_last_frame)
         self._draw_battery_world_bars(surface)
         self._draw_battery_panel(surface)
