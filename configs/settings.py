@@ -134,3 +134,7 @@ incident_coords_bg    = (20, 20, 20, 180)   # background pill (RGBA)
 
 # --- Station (compost) ---
 cradius = 48
+
+
+# --- IRL Adaptation ---
+sim_to_real_min_per_sec = 10.0 / 3.0

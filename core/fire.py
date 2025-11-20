@@ -80,9 +80,12 @@ class Fire:
         self.show_zone_ring = bool(getattr(cs, "fire_show_zone_ring", False))
 
         # Fields
+        
         N = self.GW * self.GH
         self.state: List[int]    = [self.UNBURNED] * N
         self.burn_t: List[float] = [0.0] * N
+        self.sim_t = 0.0
+        self.t_ignited: List[float] = [math.inf] * N
         self.fuel:  List[float]  = [0.0] * N
         self.moist: List[float]  = [0.0] * N
 
@@ -162,7 +165,9 @@ class Fire:
         if self.state[idx] == self.UNBURNED and self.fuel[idx] > 0.0:
             self.state[idx] = self.BURNING
             self.burn_t[idx] = 0.0
+            self.t_ignited[idx] = self.sim_t  # <-- stamp absolute time
             self.active.append(idx)
+
 
     # ---------- detection helper for drones ----------
     def burning_fraction_in_disc(self, x_px: float, y_px: float, r_px: float) -> Tuple[float, list]:
@@ -188,21 +193,51 @@ class Fire:
         return frac, hotspots
 
     # ---------- incidents ----------
+    def _estimate_ignited_time_near(self, cx: float, cy: float, r: float) -> float:
+        """Earliest absolute ignition time among burning cells near (cx,cy)."""
+        c = self.cell; r2 = r * r
+        gx0 = max(0, int((cx - r) // c)); gx1 = min(self.GW - 1, int((cx + r) // c))
+        gy0 = max(0, int((cy - r) // c)); gy1 = min(self.GH - 1, int((cy + r) // c))
+        earliest = math.inf
+        for gy in range(gy0, gy1 + 1):
+            py = gy * c + 0.5 * c
+            dy2 = (py - cx*0 + py - py)  # dummy to keep structure; not used
+            for gx in range(gx0, gx1 + 1):
+                px = gx * c + 0.5 * c
+                if (px - cx) * (px - cx) + (py - cy) * (py - cy) <= r2:
+                    idx = self._idx(gx, gy)
+                    if self.state[idx] == self.BURNING:
+                        earliest = min(earliest, self.t_ignited[idx])
+        return self.sim_t if earliest == math.inf else earliest
+
     def register_incident(self, cx: float, cy: float) -> Tuple[int, bool]:
         # merge with any active incident within radius
         for inc in self.incidents:
             if inc["active"]:
                 if (cx - inc["cx"])**2 + (cy - inc["cy"])**2 <= self._merge_r2:
                     return inc["id"], False
+
         inc_id = self._next_incident_id; self._next_incident_id += 1
+        ign_t  = self._estimate_ignited_time_near(cx, cy, self._monitor_r)
+
         self.incidents.append({
             "id": inc_id,
             "cx": cx, "cy": cy,
             "monitor_r": self._monitor_r,
             "delay": self._delay_s,
-            "zone_live": False,      # becomes True when suppression starts
-            "zone_r": 0.0,           # not visualized by default
-            "active": True
+            "zone_live": False,           # suppression not yet started
+            "zone_r": 0.0,
+            "active": True,
+
+            # Timing
+            "ignited_t": ign_t,           # absolute time earliest local ignition
+            "detected_t": self.sim_t,     # first detection time
+            "suppressed_t": None,         # when suppression flips to live
+            "extinguished_t": None,       # when all tagged burning cells gone
+
+            # One-shot notification flags (for UI log de-dup)
+            "announced_suppression": False,
+            "announced_extinguished": False
         })
         return inc_id, True
 
@@ -216,6 +251,8 @@ class Fire:
                             inc["active"] = True
                             return True
                     inc["active"] = False
+                    if inc.get("extinguished_t") is None:
+                        inc["extinguished_t"] = self.sim_t   # <-- first time out
                     return False
                 # before suppression: simple local check
                 frac, _ = self.burning_fraction_in_disc(inc["cx"], inc["cy"], inc["monitor_r"])
@@ -280,6 +317,7 @@ class Fire:
                 if inc["delay"] <= 0.0:
                     inc["zone_live"] = True
                     inc["zone_r"] = min(self._zone_r0, inc["monitor_r"])
+                    inc["suppressed_t"] = self.sim_t     # <-- when stopping started
                     # Label the whole cluster once
                     self._label_incident_cluster(inc)
             else:
@@ -330,6 +368,8 @@ class Fire:
                     self.tag[idx] = 0  # clear any stale tag
 
     def update(self, dt: float):
+        self.sim_t += dt
+
         # incidents (may arm suppression and label clusters)
         self._update_incidents(dt)
 
@@ -425,3 +465,16 @@ class Fire:
                 pygame.draw.line(surface, (20, 20, 20), (x, 0), (x, cs.screen_height), 1)
             for y in range(0, cs.screen_height, c):
                 pygame.draw.line(surface, (20, 20, 20), (0, y), (cs.screen_width, y), 1)
+
+    def get_incident(self, inc_id: int):
+        for inc in self.incidents:
+            if inc["id"] == inc_id:
+                return inc
+        return None
+
+    def mark_incident_announced(self, inc_id: int, what: str):
+        inc = self.get_incident(inc_id)
+        if not inc: return
+        key = f"announced_{what}"
+        if key in inc:
+            inc[key] = True
