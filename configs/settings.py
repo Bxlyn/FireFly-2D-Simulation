@@ -1,6 +1,4 @@
-# =========================
 # configs/settings.py
-# =========================
 
 # --- Screen ---
 screen_width  = 1280
@@ -98,7 +96,7 @@ fire_spot_max_cells  = 10
 fire_show_grid       = False
 fire_alpha_fire      = 175
 fire_draw_smoke      = False
-fire_show_zone_ring  = False   # <— do NOT draw suppression ring
+fire_show_zone_ring  = False   # do NOT draw suppression ring
 
 # --- Detection (deterministic, debounced) ---
 det_min_frac       = 0.010   # ≥ 1% of FOV burning
@@ -121,9 +119,9 @@ suppress_fuel_reduction     = 0.0
 suppress_extinguish         = False   # not instant kill; smooth out
 
 # Burned area “recovers” so future fires can start again here
-fire_burned_regen_seconds   = 25.0    # after this, BURNED -> UNBURNED with fresh fuel
+fire_burned_regen_seconds   = 25.0
 
-# --- Demo knobs (main.py may use these) ---
+# --- Demo knobs (main.py uses these) ---
 bg_ignitions_per_s     = 0.004
 click_ignite_radius_px = 10
 
@@ -135,6 +133,9 @@ incident_coords_bg    = (20, 20, 20, 180)   # background pill (RGBA)
 # --- Station (compost) ---
 cradius = 48
 
-
 # --- IRL Adaptation ---
+# Minutes of "real world" per 1 simulation second (e.g., 3.33 => 10 min in 3 sim sec)
 sim_to_real_min_per_sec = 10.0 / 3.0
+
+# --- Console log retention (no extra window) ---
+max_log_lines = 2000

@@ -1,6 +1,4 @@
-# =========================
 # core/drone.py
-# =========================
 import math
 import random
 import pygame
@@ -38,7 +36,7 @@ class Drone:
     RECHARGE = 4
     HOLD     = 5
 
-    def __init__(self, x, y, speed, *, start_delay, compost=None, fire_sim=None):
+    def __init__(self, x, y, speed, *, start_delay, compost=None, fire_sim=None, log_bus=None):
         self.radius = float(cs.drone_radius)
         self.color  = cs.blue
 
@@ -83,8 +81,9 @@ class Drone:
         self._coord_bg_color   = tuple(getattr(cs, "incident_coords_bg", (20, 20, 20, 180)))
         self._last_incident_pos = [None] * 4  # (x, y) recorded at detection time
 
-        # Fire sim reference
+        # Fire sim + terminal log bus
         self.fire = fire_sim
+        self._bus = log_bus  # if None, we print()
 
         self.speed = float(speed)
         w, h = cs.screen_width, cs.screen_height
@@ -159,6 +158,20 @@ class Drone:
 
         # Incident hold
         self._holding_incident = [None] * 4
+
+        # Sim -> IRL time scaling (minutes per sim-second)
+        self._min_per_sec = float(getattr(cs, "sim_to_real_min_per_sec", 10.0 / 3.0))
+
+    # ---------- utilities ----------
+    def _log(self, s: str):
+        """Send to short in-game HUD (last 8) and full terminal via LogBus."""
+        self._alerts.insert(0, s)
+        if len(self._alerts) > self._max_alerts:
+            self._alerts.pop()
+        if self._bus is not None:
+            self._bus.push(s)
+        else:
+            print(s, flush=True)
 
     # ---------- battery ----------
     def _battery_frac(self, i: int) -> float:
@@ -300,10 +313,14 @@ class Drone:
 
         inc_id, is_new = self.fire.register_incident(cx, cy)
         if is_new:
+            info = self.fire.get_incident(inc_id) if self.fire else None
+            det_s = 0.0
+            if info:
+                det_s = max(0.0, info.get("detected_t", 0.0) - info.get("ignited_t", 0.0))
             label = ["1", "2", "3", "4"][i]
-            msg = f"[ALERT] Drone {label} spotted fire @ ({int(cx)}, {int(cy)})"
-            self._alerts.insert(0, msg)
-            if len(self._alerts) > self._max_alerts: self._alerts.pop()
+            msg = (f"[ALERT] Drone {label} spotted fire @ ({int(cx)}, {int(cy)}) — "
+                   f"detected in {det_s:.2f}s ({self._irl_str(det_s)})")
+            self._log(msg)
             self._markers.append({"pos": pygame.Vector2(cx, cy), "ttl": self._marker_ttl})
 
             self._last_incident_pos[i] = (cx, cy)
@@ -319,9 +336,7 @@ class Drone:
         pygame.draw.circle(self._fov_surface, color, (int(center.x), int(center.y)), int(self.fov_radius))
         surface.blit(self._fov_surface, (0, 0))
 
-    
     def _draw_incident_coords_under_drones(self, surface: pygame.Surface):
-        """Show '(x,y)' of the detected fire under the drone while in HOLD."""
         if not self._show_incident_coords:
             return
         for i, pos in enumerate(self.positions):
@@ -344,7 +359,6 @@ class Drone:
             bg.fill(bg_col)
             surface.blit(bg, (x, y))
             surface.blit(srf, (x + pad_x, y + pad_y))
-
 
     def _draw_battery_world_bars(self, surface: pygame.Surface):
         if not (self._show_hud and self._show_world_bars): return
@@ -382,7 +396,7 @@ class Drone:
             panel.blit(psrf, (bx + bw - psrf.get_width() - 2, by - 1))
         surface.blit(panel, (x0, y0))
 
-        # Alerts (top-right)
+        # Alerts (top-right, last 8 only)
         if self._alerts:
             pad = 8; W2 = 380; line_h = 16
             H2 = pad * 2 + line_h * min(len(self._alerts), 8)
@@ -446,14 +460,40 @@ class Drone:
             if self.phase[i] == self.HOLD:
                 inc_id = self._holding_incident[i]
                 active = (self.fire is not None and self.fire.incident_is_active(inc_id))
-                if not active:
-                    self._holding_incident[i] = None
-                    self.phase[i] = self.SEARCH
-                    self.replan_timer[i] = 0.0
-                else:
+                if active:
+                    # One-time "suppression started" dispatch when zone goes live
+                    if self.fire:
+                        info = self.fire.get_incident(inc_id)
+                        if info and info.get("zone_live") and not info.get("announced_suppression", False):
+                            det_s  = max(0.0, info["detected_t"]   - info["ignited_t"])
+                            stop_s = max(0.0, info["suppressed_t"] - info["ignited_t"])
+                            label = ["1", "2", "3", "4"][i]
+                            msg2 = (f"[DISPATCH] Drone {label} fire @ ({int(info['cx'])}, {int(info['cy'])}) — "
+                                    f"spread {stop_s:.2f}s ({self._irl_str(stop_s)}) before stop; "
+                                    f"detected in {det_s:.2f}s ({self._irl_str(det_s)})")
+                            self._log(msg2)
+                            self.fire.mark_incident_announced(inc_id, "suppression")
                     self.work_remaining[i] = max(0.0, self.work_remaining[i] - dt)
                     if self._should_return_now(i):
                         self.phase[i] = self.RETURN
+                    continue
+
+                else:
+                    # Incident fully out. Log once.
+                    if self.fire:
+                        info = self.fire.get_incident(inc_id)
+                        if info and info.get("extinguished_t") is not None and not info.get("announced_extinguished", False):
+                            base_t = info.get("suppressed_t") or info.get("detected_t") or info.get("ignited_t")
+                            out_s  = max(0.0, info["extinguished_t"] - base_t)
+                            label  = ["1", "2", "3", "4"][i]
+                            msg3 = (f"[UPDATE] Drone {label} fire @ ({int(info['cx'])}, {int(info['cy'])}) — "
+                                    f"fully out in {out_s:.2f}s ({self._irl_str(out_s)}) after stop")
+                            self._log(msg3)
+                            self.fire.mark_incident_announced(inc_id, "extinguished")
+                    # Clear hold and resume search
+                    self._holding_incident[i] = None
+                    self.phase[i] = self.SEARCH
+                    self.replan_timer[i] = 0.0
                     continue
 
             # RECHARGE
@@ -524,3 +564,11 @@ class Drone:
                 if self._should_return_now(i):
                     self.phase[i] = self.RETURN
                     self.mc_target[i] = None
+
+    def _irl_str(self, sim_seconds: float) -> str:
+        mins = max(0.0, sim_seconds) * self._min_per_sec
+        if mins >= 90.0:
+            h = int(mins // 60)
+            m = int(round(mins % 60))
+            return f"~{h}h {m}m"
+        return f"~{mins:.1f}m"
