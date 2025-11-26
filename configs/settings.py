@@ -1,5 +1,3 @@
-# configs/settings.py
-
 # --- Screen ---
 screen_width  = 1280
 screen_height = 720
@@ -43,17 +41,17 @@ show_belief_heatmap = False
 heatmap_alpha       = 120
 
 # --- Duty cycle & battery/RTB ---
-duty_work_seconds      = 25.0
-duty_recharge_seconds  = 3.0
-duty_jitter_frac       = 0.25
-show_battery_hud       = True
-battery_world_bars     = True
-battery_panel          = True
-battery_panel_pos      = (12, 12)
-battery_panel_width    = 240
-battery_bar_h          = 10
-battery_low_threshold  = 0.20
-battery_med_threshold  = 0.50
+duty_work_seconds       = 25.0
+duty_recharge_seconds   = 3.0
+duty_jitter_frac        = 0.25
+show_battery_hud        = True
+battery_world_bars      = True
+battery_panel           = True
+battery_panel_pos       = (12, 12)
+battery_panel_width     = 240
+battery_bar_h           = 10
+battery_low_threshold   = 0.20
+battery_med_threshold   = 0.50
 battery_return_threshold = 0.20
 battery_reserve_seconds  = 3.0
 
@@ -109,16 +107,12 @@ marker_ttl         = 4.0
 incident_merge_radius_px    = 100
 incident_monitor_radius_px  = 140
 incident_suppress_radius_px = 90
-stop_after_detect_delay     = 2.0     # delay before suppression starts
-suppress_grow_speed_pxps    = 160.0   # if you keep a zone, it can grow (not visualized)
-quench_burn_boost           = 6.0     # faster fade inside suppressed fire
-
-# IMPORTANT: keep these zero so suppression is TEMPORARY (area can re-ignite later)
+stop_after_detect_delay     = 2.0
+suppress_grow_speed_pxps    = 160.0
+quench_burn_boost           = 6.0
 suppress_wet                = 0.0
 suppress_fuel_reduction     = 0.0
-suppress_extinguish         = False   # not instant kill; smooth out
-
-# Burned area “recovers” so future fires can start again here
+suppress_extinguish         = False
 fire_burned_regen_seconds   = 25.0
 
 # --- Demo knobs (main.py uses these) ---
@@ -126,9 +120,9 @@ bg_ignitions_per_s     = 0.004
 click_ignite_radius_px = 10
 
 # --- Under-drone incident coordinates label ---
-show_incident_coords   = True                 # master toggle
-incident_coords_color  = (240, 240, 240)     # text color
-incident_coords_bg     = (20, 20, 20, 180)   # background pill (RGBA)
+show_incident_coords   = True
+incident_coords_color  = (240, 240, 240)
+incident_coords_bg     = (20, 20, 20, 180)
 
 # --- Station (compost) ---
 cradius = 48
@@ -137,11 +131,15 @@ cradius = 48
 # Minutes of "real world" per 1 simulation second (e.g., 3.33 => 10 min in 3 sim sec)
 sim_to_real_min_per_sec = 10.0 / 3.0
 
-# --- Real-world spatial scale ---
-# If you know your map scale, set px_to_meter directly. Otherwise leave None and
-# the sim will calibrate so that (cs.speed px/s) equals target_uav_speed_kmh IRL.
-px_to_meter = None             # e.g., 0.30 (1 px = 0.30 m). Leave None to auto-calc.
-target_uav_speed_kmh = 90.0    # used only when px_to_meter is None
+# --- Real-world spatial scale (CRITICAL for your error fix) ---
+# meters per pixel (px → m). Tune this to your map; 0.5 is a reasonable demo value.
+meters_per_px = 0.5
 
-# --- Console log retention (no extra window) ---
+# Optional reference cruise speed for logs
+hybrid_vtol_cruise_kmh = 72.0
+
+# --- Console log retention (terminal) ---
 max_log_lines = 2000
+
+# Periodic metrics print (seconds). Set ≤ 0 to disable in main.
+metrics_log_period_s = 1.0
