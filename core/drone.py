@@ -85,6 +85,14 @@ class Drone:
         self.fire = fire_sim
         self._bus = log_bus  # if None, we print()
 
+        # Shared real-world scale (prefer Fire's scale if available)
+        if self.fire is not None and hasattr(self.fire, "px_to_m"):
+            self._px_to_m = float(self.fire.px_to_m)
+        else:
+            # Fallback: derive from target VTOL speed
+            tgt = float(getattr(cs, "target_uav_speed_kmh", 90.0))
+            self._px_to_m = (tgt / 3.6) / max(float(speed), 1e-6)
+
         self.speed = float(speed)
         w, h = cs.screen_width, cs.screen_height
         cx, cy = w // 2, h // 2
@@ -172,6 +180,18 @@ class Drone:
             self._bus.push(s)
         else:
             print(s, flush=True)
+
+    def _fmt_area(self, m2: float) -> str:
+        """Friendly IRL area units."""
+        if m2 < 10.0:
+            return f"{m2:.2f} m²"
+        if m2 < 1000.0:
+            return f"{m2:.0f} m²"
+        if m2 < 10000.0:
+            return f"{m2/1_000:.2f}k m²"
+        if m2 < 1_000_000.0:
+            return f"{m2/10_000:.2f} ha"
+        return f"{m2/1_000_000:.3f} km²"
 
     # ---------- battery ----------
     def _battery_frac(self, i: int) -> float:
@@ -317,12 +337,25 @@ class Drone:
             det_s = 0.0
             if info:
                 det_s = max(0.0, info.get("detected_t", 0.0) - info.get("ignited_t", 0.0))
+
+            # --- NEW: compute fire footprint & burned area (IRL and sim) at detection ---
+            stats = self.fire.incident_footprint(inc_id)
+            burned_cells   = stats["burned_cells"]
+            burning_cells  = stats["burning_cells"]
+            total_cells    = stats["cells_fire"]
+            cell_area_m2   = stats["cell_area_m2"]
+            burned_m2      = burned_cells  * cell_area_m2
+            burning_m2     = burning_cells * cell_area_m2
+            total_m2       = total_cells   * cell_area_m2
+
             label = ["1", "2", "3", "4"][i]
             msg = (f"[ALERT] Drone {label} spotted fire @ ({int(cx)}, {int(cy)}) — "
-                   f"detected in {det_s:.2f}s ({self._irl_str(det_s)})")
+                   f"spread {det_s:.2f}s sim ({self._irl_str(det_s)}) before detection; "
+                   f"burned {self._fmt_area(burned_m2)} (sim {burned_cells} cells), "
+                   f"footprint {self._fmt_area(total_m2)} (sim {total_cells} cells).")
             self._log(msg)
-            self._markers.append({"pos": pygame.Vector2(cx, cy), "ttl": self._marker_ttl})
 
+            self._markers.append({"pos": pygame.Vector2(cx, cy), "ttl": self._marker_ttl})
             self._last_incident_pos[i] = (cx, cy)
 
             # HOLD until that cluster is fully gone

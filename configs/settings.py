@@ -126,9 +126,9 @@ bg_ignitions_per_s     = 0.004
 click_ignite_radius_px = 10
 
 # --- Under-drone incident coordinates label ---
-show_incident_coords = True                 # master toggle
-incident_coords_color = (240, 240, 240)     # text color
-incident_coords_bg    = (20, 20, 20, 180)   # background pill (RGBA)
+show_incident_coords   = True                 # master toggle
+incident_coords_color  = (240, 240, 240)     # text color
+incident_coords_bg     = (20, 20, 20, 180)   # background pill (RGBA)
 
 # --- Station (compost) ---
 cradius = 48
@@ -136,6 +136,12 @@ cradius = 48
 # --- IRL Adaptation ---
 # Minutes of "real world" per 1 simulation second (e.g., 3.33 => 10 min in 3 sim sec)
 sim_to_real_min_per_sec = 10.0 / 3.0
+
+# --- Real-world spatial scale ---
+# If you know your map scale, set px_to_meter directly. Otherwise leave None and
+# the sim will calibrate so that (cs.speed px/s) equals target_uav_speed_kmh IRL.
+px_to_meter = None             # e.g., 0.30 (1 px = 0.30 m). Leave None to auto-calc.
+target_uav_speed_kmh = 90.0    # used only when px_to_meter is None
 
 # --- Console log retention (no extra window) ---
 max_log_lines = 2000

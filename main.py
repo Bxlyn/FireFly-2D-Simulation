@@ -49,6 +49,14 @@ log_bus.push("[SYSTEM] Simulation started. Left click to ignite a spot fire. Pre
 
 compost = cc.Compost(radius=cs.cradius, color=cs.cyellow)
 sim_fire = fire.Fire(cell_px=cs.fire_cell_px)
+
+# Announce scale so IRL conversions are clear
+log_bus.push(
+    f"[SCALE] 1 px = {sim_fire.px_to_m:.3f} m; "
+    f"1 fire cell = {sim_fire.cell} px = {sim_fire.cell * sim_fire.px_to_m:.2f} m; "
+    f"cell area = {sim_fire.cell_area_m2:.1f} m²."
+)
+
 drones = cd.Drone(cs.startX, cs.startY, cs.speed,
                   start_delay=cs.start_delay,
                   compost=compost,

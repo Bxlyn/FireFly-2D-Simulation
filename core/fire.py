@@ -1,6 +1,4 @@
-# =========================
 # core/fire.py
-# =========================
 import math
 import random
 from typing import List, Tuple, Optional
@@ -80,7 +78,6 @@ class Fire:
         self.show_zone_ring = bool(getattr(cs, "fire_show_zone_ring", False))
 
         # Fields
-        
         N = self.GW * self.GH
         self.state: List[int]    = [self.UNBURNED] * N
         self.burn_t: List[float] = [0.0] * N
@@ -96,6 +93,16 @@ class Fire:
         self.recover_T = float(getattr(cs, "fire_burned_regen_seconds", 25.0))
         self.regen_t: List[float] = [0.0] * N
         self._regen_accum = 0.0
+
+        # --- Real-world scale (px -> m) ---
+        pxm = getattr(cs, "px_to_meter", None)
+        if pxm is None:
+            # Derive from target VTOL speed so that sim drone speed matches IRL cruise
+            tgt = float(getattr(cs, "target_uav_speed_kmh", 90.0))
+            spx = float(getattr(cs, "speed", 80.0))
+            self._px_to_m = (tgt / 3.6) / max(spx, 1e-6)
+        else:
+            self._px_to_m = float(pxm)
 
         self._init_terrain()
 
@@ -121,8 +128,6 @@ class Fire:
         self._grow_v     = float(getattr(cs, "suppress_grow_speed_pxps", 160.0))
         self._quench     = float(getattr(cs, "quench_burn_boost", 6.0))
 
-        # (suppression_wet/fuel reduction are disabled by default in settings)
-
     # ---------- terrain ----------
     def _init_terrain(self):
         for gy in range(self.GH):
@@ -140,6 +145,15 @@ class Fire:
     def _gxgy(self, idx: int) -> Tuple[int, int]: return (idx % self.GW, idx // self.GW)
     def _center_px(self, gx: int, gy: int) -> Tuple[float, float]:
         return (gx * self.cell + 0.5 * self.cell, gy * self.cell + 0.5 * self.cell)
+
+    # ---------- public scale helpers ----------
+    @property
+    def px_to_m(self) -> float:
+        return self._px_to_m
+
+    @property
+    def cell_area_m2(self) -> float:
+        return (self.cell * self._px_to_m) ** 2
 
     # ---------- ignition API ----------
     def ignite_world(self, x_px: float, y_px: float, radius_px: int = 0):
@@ -168,7 +182,6 @@ class Fire:
             self.t_ignited[idx] = self.sim_t  # <-- stamp absolute time
             self.active.append(idx)
 
-
     # ---------- detection helper for drones ----------
     def burning_fraction_in_disc(self, x_px: float, y_px: float, r_px: float) -> Tuple[float, list]:
         c = self.cell; r2 = r_px * r_px
@@ -192,6 +205,53 @@ class Fire:
         frac = (burning / inside) if inside > 0 else 0.0
         return frac, hotspots
 
+    # ---------- area / footprint helpers ----------
+    def footprint_in_disc(self, x_px: float, y_px: float, r_px: float):
+        """Count burning + burned cells in a disc; return sim counts + IRL areas."""
+        c = self.cell; r2 = r_px * r_px
+        gx0 = max(0, int((x_px - r_px) // c))
+        gx1 = min(self.GW - 1, int((x_px + r_px) // c))
+        gy0 = max(0, int((y_px - r_px) // c))
+        gy1 = min(self.GH - 1, int((y_px + r_px) // c))
+        inside = 0; burning = 0; burned = 0
+        for gy in range(gy0, gy1 + 1):
+            cy = gy * c + 0.5 * c
+            dy2 = (cy - y_px) * (cy - y_px)
+            for gx in range(gx0, gx1 + 1):
+                cx = gx * c + 0.5 * c
+                dx = cx - y_px + (cx - cx)  # dummy to keep pattern consistent
+                # Use correct check
+                dx = cx - x_px
+                if dx * dx + dy2 <= r2:
+                    inside += 1
+                    idx = self._idx(gx, gy)
+                    st = self.state[idx]
+                    if st == self.BURNING:
+                        burning += 1
+                    elif st == self.BURNED:
+                        burned += 1
+        cell_area_m2 = self.cell_area_m2
+        return {
+            "inside_cells": inside,
+            "burning_cells": burning,
+            "burned_cells": burned,
+            "cells_fire": burning + burned,
+            "cell_area_m2": cell_area_m2,
+            "area_m2_burning": burning * cell_area_m2,
+            "area_m2_burned":  burned * cell_area_m2,
+            "area_m2_total":   (burning + burned) * cell_area_m2,
+        }
+
+    def incident_footprint(self, inc_id: int):
+        inc = self.get_incident(inc_id)
+        if not inc:
+            return {
+                "inside_cells": 0, "burning_cells": 0, "burned_cells": 0,
+                "cells_fire": 0, "cell_area_m2": self.cell_area_m2,
+                "area_m2_burning": 0.0, "area_m2_burned": 0.0, "area_m2_total": 0.0
+            }
+        return self.footprint_in_disc(inc["cx"], inc["cy"], inc["monitor_r"])
+
     # ---------- incidents ----------
     def _estimate_ignited_time_near(self, cx: float, cy: float, r: float) -> float:
         """Earliest absolute ignition time among burning cells near (cx,cy)."""
@@ -201,7 +261,6 @@ class Fire:
         earliest = math.inf
         for gy in range(gy0, gy1 + 1):
             py = gy * c + 0.5 * c
-            dy2 = (py - cx*0 + py - py)  # dummy to keep structure; not used
             for gx in range(gx0, gx1 + 1):
                 px = gx * c + 0.5 * c
                 if (px - cx) * (px - cx) + (py - cy) * (py - cy) <= r2:
@@ -432,7 +491,7 @@ class Fire:
         # Recover burned areas over time so the map can re-ignite there later
         self._recover_burned(dt)
 
-    # ---------- drawing (full redraw per frame for smoothness) ----------
+    # ---------- drawing ----------
     def draw(self, surface: pygame.Surface):
         self.overlay.fill((0, 0, 0, 0))  # clear
 
