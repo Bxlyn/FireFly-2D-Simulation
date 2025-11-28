@@ -29,7 +29,7 @@ class LogBus:
         with self._lock:
             self._lines.append(s)
         if self._mirror:
-            print(s, flush=True)  # real-time terminal output
+            print(s, flush=True)
 
     def snapshot(self):
         with self._lock:
@@ -82,35 +82,26 @@ drones = cd.Drone(
     log_bus=log_bus
 )
 
-# Log the chosen scale and expected cruise mapping once
-mpp = drones.m_per_px  # meters per pixel (now exists)
-target_kmh = float(getattr(cs, "hybrid_vtol_cruise_kmh", 72.0))  # display only
+# Scale summary (concise)
+mpp = drones.m_per_px  # meters per pixel
+target_kmh = float(getattr(cs, "hybrid_vtol_cruise_kmh",
+                           getattr(cs, "target_uav_speed_kmh", 72.0)))
 log_bus.push(
-    f"[SCALE] 1 px = {mpp:.3f} m | sim speed = {cs.speed:.1f} px/s ≈ {cs.speed*mpp*3.6:.1f} km/h "
-    f"(target cruise {target_kmh:.1f} km/h)"
+    f"[SCALE] 1 px = {mpp:.3f} m | sim {cs.speed:.1f} px/s ≈ {cs.speed*mpp*3.6:.1f} km/h "
+    f"(target {target_kmh:.0f} km/h)"
 )
 
-# Metrics logging cadence
-_metrics_accum = 0.0
-_metrics_period = float(getattr(cs, "metrics_log_period_s", 1.0))
-
-
 # =========================
-# Main loop
+# Main loop (no periodic metrics spam)
 # =========================
 while running:
     for event in pygame.event.get():
-        # Close main window
         if event.type == pygame.QUIT:
             running = False
             break
-
-        # Esc to quit
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             running = False
             break
-
-        # Left-click to ignite (also log so you see something immediately)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             x, y = pygame.mouse.get_pos()
             sim_fire.ignite_world(x, y, radius_px=cs.click_ignite_radius_px)
@@ -120,7 +111,6 @@ while running:
     if not running:
         break
 
-    # Step sim
     dt = clock.tick(cs.fps) / 1000.0
     screen.fill(cs.dgreen)
 
@@ -131,32 +121,8 @@ while running:
     sim_fire.update(dt)
     sim_fire.draw(screen)
 
-    # Drones
     drones.move(dt)
     drones.draw(screen, dt_since_last_frame=dt)
-
-    # Periodic METRICS logging (sim time, IRL time, drone speeds, fire perimeter & area)
-    _metrics_accum += dt
-    if _metrics_accum >= _metrics_period:
-        _metrics_accum = 0.0
-
-        # Time (sim + IRL)
-        sim_t = sim_fire.sim_t
-        irl_txt = irl_str(sim_t)
-
-        # Drone instantaneous speeds (km/h)
-        kmhs = drones.get_last_speeds_kmh()     # list of 4 floats
-
-        # Fire metrics (global)
-        fm = sim_fire.compute_metrics(drones.m_per_px)
-        log_bus.push(
-            "[METRICS] "
-            f"sim={sim_t:6.2f}s | IRL≈{irl_txt} | "
-            f"Speed km/h D1:{kmhs[0]:.1f} D2:{kmhs[1]:.1f} D3:{kmhs[2]:.1f} D4:{kmhs[3]:.1f} | "
-            f"Perimeter {fm['perimeter_m']:.0f} m | "
-            f"Burning {fm['burning_area_ha']:.3f} ha | "
-            f"Scorched {fm['scorched_area_ha']:.3f} ha"
-        )
 
     pygame.display.flip()
 

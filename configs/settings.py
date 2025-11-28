@@ -133,7 +133,7 @@ sim_to_real_min_per_sec = 10.0 / 3.0
 
 # --- Real-world spatial scale (CRITICAL for your error fix) ---
 # meters per pixel (px → m). Tune this to your map; 0.5 is a reasonable demo value.
-meters_per_px = 0.5
+meters_per_px = 0.2
 
 # Optional reference cruise speed for logs
 hybrid_vtol_cruise_kmh = 72.0

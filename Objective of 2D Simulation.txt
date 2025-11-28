@@ -1,0 +1,11 @@
+Objective of 2D Simulation:
+1. Add a background forest
+3. Incorporate IRL speed conversion
+5. Shows potential financial loss and money saved comparing with average financial loss in forest
+6. End button that shows information about average detection speed, time elapsed, etc everything(linked to 5).
+
+
+Issues:
+- Repeated information in Log
+- Detect doesn't show burned fire when detected, just before it was extinguished
+- Might need better IRL conversions for the time and area. Area is too much
