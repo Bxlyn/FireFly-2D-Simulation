@@ -1,3 +1,4 @@
+# core/drone.py
 import math
 import random
 import pygame
@@ -82,9 +83,7 @@ class Drone:
 
         # Fire sim + terminal log bus
         self.fire = fire_sim
-        self._bus = log_bus  # if None, we print()
-
-        self.speed = float(speed)
+        self._bus = log_bus
 
         # --- Real-world spatial scale: meters per pixel (px → m) ---
         cfg_mpp = None
@@ -100,8 +99,9 @@ class Drone:
             cruise_kmh = float(getattr(cs, "hybrid_vtol_cruise_kmh",
                                        getattr(cs, "target_uav_speed_kmh", 72.0)))
             cruise_mps = cruise_kmh / 3.6
-            self.m_per_px = cruise_mps / max(self.speed, 1e-6)
+            self.m_per_px = cruise_mps / max(float(speed), 1e-6)
 
+        self.speed = float(speed)
         w, h = cs.screen_width, cs.screen_height
         cx, cy = w // 2, h // 2
 
@@ -181,7 +181,7 @@ class Drone:
         # Speed + distance tracking
         self._prev_positions   = [p.copy() for p in self.positions]
         self._last_speed_pxps  = [0.0] * 4
-        self.distance_px       = [0.0, 0.0, 0.0, 0.0]  # <--- NEW: cumulative distance per drone (px)
+        self.distance_px       = [0.0, 0.0, 0.0, 0.0]  # <— NEW
 
     # ---------- utilities ----------
     def _log(self, s: str):
@@ -196,8 +196,7 @@ class Drone:
     def _irl_str(self, sim_seconds: float) -> str:
         mins = max(0.0, sim_seconds) * self._min_per_sec
         if mins >= 90.0:
-            h = int(mins // 60)
-            m = int(round(mins % 60))
+            h = int(mins // 60); m = int(round(mins % 60))
             return f"~{h}h {m}m"
         return f"~{mins:.1f}m"
 
@@ -239,31 +238,6 @@ class Drone:
         dist_home = self.positions[i].distance_to(self.base_center)
         time_home = dist_home / max(self.speed, 1e-6)
         return self.work_remaining[i] <= (time_home + self.reserve_seconds)
-
-    # ---------- area helpers based on incident tag ----------
-    def _incident_cells_and_area_by_tag(self, inc_id: int):
-        """Count cells (burning or burned) with tag == inc_id; return sim counts + IRL areas."""
-        if not self.fire:
-            return 0, 0, 0, 0.0, 0.0
-        fw = self.fire
-        cell_m = fw.cell * self.m_per_px
-        cell_area_m2 = cell_m * cell_m
-
-        total = burned = burning = 0
-        N = fw.GW * fw.GH
-        for idx in range(N):
-            if fw.tag[idx] == inc_id:
-                st = fw.state[idx]
-                if st == fw.BURNING:
-                    burning += 1
-                    total += 1
-                elif st == fw.BURNED:
-                    burned += 1
-                    total += 1
-
-        total_m2  = total  * cell_area_m2
-        burned_m2 = burned * cell_area_m2
-        return total, burned, burning, total_m2, burned_m2
 
     # ---------- belief ----------
     def _belief_sum_in_disc(self, sector_idx: int, cx: float, cy: float, radius: float) -> float:
@@ -387,23 +361,22 @@ class Drone:
                 det_s = max(0.0, info.get("detected_t", 0.0) - info.get("ignited_t", 0.0))
             label = ["1", "2", "3", "4"][i]
 
-            # --- Area snapshot at DETECT (local disk) ---
+            # Area snapshot at DETECT (local disk)
             try:
-                r_px = self.fire._monitor_r if hasattr(self.fire, "_monitor_r") else self.fov_radius
+                r_px = getattr(self.fire, "_monitor_r", self.fov_radius)
                 stats = self.fire.compute_local_metrics(cx, cy, r_px, self.m_per_px)
                 cells_total = int(stats.get("footprint_cells", 0))
                 m2_total = float(stats.get("footprint_area_ha", 0.0)) * 10_000.0
-                m2_burned_now = float(stats.get("scorched_area_ha", 0.0)) * 10_000.0
+                m2_burned = float(stats.get("scorched_area_ha", 0.0)) * 10_000.0
             except Exception:
                 cells_total = 0
-                m2_total = m2_burned_now = 0.0
+                m2_total = m2_burned = 0.0
 
-            # ---- Concise DETECT log (time-to-detect + area-at-detect) ----
             self._log(
                 f"[DETECT] D{label} ({int(cx)},{int(cy)}) | "
                 f"t_detect {det_s:.2f}s sim (≈{self._irl_str(det_s)}) | "
                 f"area@detect {self._fmt_m2(m2_total)} (sim {cells_total} cells), "
-                f"scorched {self._fmt_m2(m2_burned_now)}"
+                f"scorched {self._fmt_m2(m2_burned)}"
             )
 
             self._markers.append({"pos": pygame.Vector2(cx, cy), "ttl": self._marker_ttl})
@@ -545,7 +518,7 @@ class Drone:
                 inc_id = self._holding_incident[i]
                 active = (self.fire is not None and self.fire.incident_is_active(inc_id))
                 if active:
-                    # DISPATCH log when suppression becomes live (no duplicate t_detect here)
+                    # One-time DISPATCH when suppression goes live
                     if self.fire:
                         info = self.fire.get_incident(inc_id)
                         if info and info.get("zone_live") and not info.get("announced_suppression", False):
@@ -562,13 +535,14 @@ class Drone:
                     continue
 
                 else:
-                    # Incident fully out: log final footprint (by tag) once
+                    # Incident fully out → one-shot final area & time-to-out
                     if self.fire:
                         info = self.fire.get_incident(inc_id)
                         if info and info.get("extinguished_t") is not None and not info.get("announced_extinguished", False):
                             base_t = info.get("suppressed_t") or info.get("detected_t") or info.get("ignited_t")
                             out_s  = max(0.0, info["extinguished_t"] - base_t)
 
+                            # Area by tag (final footprint)
                             total_cells, burned_cells, burning_cells, total_m2, burned_m2 = \
                                 self._incident_cells_and_area_by_tag(inc_id)
 
@@ -654,44 +628,80 @@ class Drone:
                     self.phase[i] = self.RETURN
                     self.mc_target[i] = None
 
-        # Speed + distance update (per frame)
+        # Speed & distance update
         if dt > 1e-6:
             for i in range(4):
                 disp = self.positions[i] - self._prev_positions[i]
-                dlen = disp.length()
-                self.distance_px[i] += dlen                 # <--- accumulate distance (px)
-                self._last_speed_pxps[i] = dlen / dt
+                d = disp.length()
+                self._last_speed_pxps[i] = d / dt
+                self.distance_px[i] += d          # <— accumulate distance
                 self._prev_positions[i] = self.positions[i].copy()
         else:
             for i in range(4):
                 self._prev_positions[i] = self.positions[i].copy()
 
-    # ---------- run-end summary ----------
+    # ---------- tag-area helper ----------
+    def _incident_cells_and_area_by_tag(self, inc_id: int):
+        if not self.fire:
+            return 0, 0, 0, 0.0, 0.0
+        fw = self.fire
+        cell_m = fw.cell * self.m_per_px
+        cell_area_m2 = cell_m * cell_m
+
+        total = burned = burning = 0
+        N = fw.GW * fw.GH
+        for idx in range(N):
+            if fw.tag[idx] == inc_id:
+                st = fw.state[idx]
+                if st == fw.BURNING:
+                    burning += 1; total += 1
+                elif st == fw.BURNED:
+                    burned += 1; total += 1
+
+        total_m2  = total  * cell_area_m2
+        burned_m2 = burned * cell_area_m2
+        return total, burned, burning, total_m2, burned_m2
+
+    # ---------- summary ----------
     def build_summary(self, fire):
         sim_time = fire.sim_t
         irl_time = self._irl_str(sim_time)
 
-        # Pull metrics from Fire (support both *_m2 and non-suffixed names)
-        det_times = getattr(fire, "det_times", [])
-        detect_areas = getattr(fire, "detect_areas_m2", getattr(fire, "detect_areas", []))
-        final_areas  = getattr(fire, "final_areas_m2",  getattr(fire, "final_areas",  []))
+        # arrays recorded by Fire during incidents
+        det_times      = getattr(fire, "det_times", [])
+        final_areas_m2 = getattr(fire, "final_areas_m2", [])
+        detect_areas_m2= getattr(fire, "detect_areas_m2", [])
 
         avg_det_sim = (sum(det_times) / len(det_times)) if det_times else 0.0
         avg_det_irl = self._irl_str(avg_det_sim)
-        avg_detect_area = (sum(detect_areas) / len(detect_areas)) if detect_areas else 0.0
-        avg_final_area  = (sum(final_areas)  / len(final_areas))  if final_areas  else 0.0
-        biggest_fire    = max(final_areas) if final_areas else 0.0
 
-        # Totals (final areas are per-incident footprints when extinguished)
-        total_burned = sum(final_areas)
+        avg_detect_area = (sum(detect_areas_m2) / len(detect_areas_m2)) if detect_areas_m2 else 0.0
+        avg_final_area  = (sum(final_areas_m2)  / len(final_areas_m2))  if final_areas_m2  else 0.0
+        biggest_fire    = max(final_areas_m2) if final_areas_m2 else 0.0
 
-        # Use a grid snapshot for "total scorched so far" (ever-burned), so it works even if you exit mid-incident
-        snap = fire.compute_metrics(self.m_per_px) if hasattr(fire, "compute_metrics") else {"scorched_area_ha": 0.0}
-        total_scorched = float(snap.get("scorched_area_ha", 0.0)) * 10_000.0
+        total_final_area_m2  = sum(final_areas_m2)
+        total_detect_area_m2 = sum(detect_areas_m2)
 
-        # Distances
-        distances_px = getattr(self, "distance_px", [0.0, 0.0, 0.0, 0.0])
-        distances_km = [d * self.m_per_px / 1000.0 for d in distances_px]
+        # distances
+        distances_km = [d * self.m_per_px / 1000.0 for d in self.distance_px]
+        avg_speed_kmh = sum(self.get_last_speeds_kmh()) / 4.0
+
+        # --- Economics ---
+        currency = getattr(cs, "econ_currency", "€")
+        cost_per_ha = float(getattr(cs, "econ_cost_per_ha", 10000.0))
+        cost_per_m2 = cost_per_ha / 10_000.0
+
+        # Actual (potential) loss = final area * cost per m2
+        potential_loss = total_final_area_m2 * cost_per_m2
+
+        # Baseline upper-bound: assume each incident could fill its monitor disk
+        baseline_area_upper_m2 = 0.0
+        for inc in getattr(fire, "incidents", []):
+            r_px = float(inc.get("monitor_r", getattr(fire, "_monitor_r", 140)))
+            baseline_area_upper_m2 += math.pi * (r_px * self.m_per_px) ** 2
+        baseline_loss_upper = baseline_area_upper_m2 * cost_per_m2
+
+        saved_upper = max(0.0, baseline_loss_upper - potential_loss)
 
         return {
             "sim_time": sim_time,
@@ -702,12 +712,22 @@ class Drone:
             "avg_detect_area_m2": avg_detect_area,
             "avg_final_area_m2": avg_final_area,
             "biggest_fire_m2": biggest_fire,
-            "total_burned_m2": total_burned,
-            "total_scorched_m2": total_scorched,
+            "total_burned_m2": total_final_area_m2,
+            "total_scorched_m2": total_final_area_m2,  # footprint-based proxy
             "undetected_fires": getattr(fire, "undetected_count", 0),
-            "drone_avg_speed_kmh": sum(self.get_last_speeds_kmh()) / 4.0,
+
+            "drone_avg_speed_kmh": avg_speed_kmh,
             "drone_distances_km": distances_km,
             "dispatch_events": getattr(fire, "dispatch_count", 0),
             "extinguished_events": getattr(fire, "extinguished_count", 0),
             "user_ignitions": getattr(fire, "user_ignitions", 0),
+
+            # Economics
+            "econ_currency": currency,
+            "econ_cost_per_ha": cost_per_ha,
+            "econ_cost_per_m2": cost_per_m2,
+            "econ_potential_loss": potential_loss,
+            "econ_baseline_loss_upper": baseline_loss_upper,
+            "econ_saved_upper": saved_upper,
+            "total_detect_area_m2": total_detect_area_m2,
         }

@@ -143,3 +143,10 @@ max_log_lines = 2000
 
 # Periodic metrics print (seconds). Set ≤ 0 to disable in main.
 metrics_log_period_s = 1.0
+
+# --- Economics (IRL baseline) ---
+# Source baseline: EFFIS/ESA estimate ~€10,000 per hectare (see README / code comment)
+econ_currency = "$"        # UI currency symbol
+econ_cost_per_ha = 11599.58 # average IRL loss per hectare 
+# Savings model used in summary: upper bound assuming each incident could fill its monitor disk
+econ_savings_model = "monitor_disk_upper"
