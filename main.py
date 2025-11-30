@@ -8,6 +8,7 @@ import core.compost as cc
 import core.fire as fire
 import configs.settings as cs
 from ui.start_screen import run_start_screen
+from ui.summary_screen import run_summary_screen
 
 
 # =========================
@@ -125,5 +126,10 @@ while running:
     drones.draw(screen, dt_since_last_frame=dt)
 
     pygame.display.flip()
+
+pygame.display.set_caption("Simulation Summary")
+
+summary = drones.build_summary(sim_fire) 
+run_summary_screen(screen, clock, summary)
 
 pygame.quit()
