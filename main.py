@@ -129,7 +129,9 @@ while running:
 
 pygame.display.set_caption("Simulation Summary")
 
-summary = drones.build_summary(sim_fire) 
+pygame.event.clear()
+
+summary = drones.build_summary(sim_fire)
 run_summary_screen(screen, clock, summary)
 
 pygame.quit()
