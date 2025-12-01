@@ -1,13 +1,9 @@
 # FireFly 2D Wildfire Simulation
 
-> **Grand Challenges Project** — A 2D, real‑time wildfire simulation built with **Python + Pygame**.  
-> A squad of autonomous drones survey a landscape, detect fires, and “dispatch” suppression to stop spread.  
-> The sim logs operational events and produces a **dashboard‑style summary** with detection, area, and **economic impact** metrics (vs. a conventional‑detection baseline).
+**Grand Challenges Project Prototype** — A 2D, real‑time wildfire simulation built with **Python + Pygame**.
 
-<p align="center">
-  <!-- Replace with actual path -->
-  <img src="docs/screenshots/cover.png" alt="FireFly 2D Simulation — cover" width="75%">
-</p>
+> Autonomous drones survey a landscape, detect fires, and “dispatch” suppression to stop spread.  
+> The sim logs operational events and produces a **summary** with detection, area, and **economic impact** metrics (vs. a conventional‑detection baseline).
 
 ---
 
@@ -24,27 +20,24 @@
 - [Metrics & Economics](#metrics--economics)
 - [Reproducibility](#reproducibility)
 - [Troubleshooting](#troubleshooting)
-- [Roadmap](#roadmap)
-- [Cite / Acknowledgments](#cite--acknowledgments)
+- [Acknowledgments](#cite--acknowledgments)
 - [License](#license)
 
 ---
 
 ## Demo
 
-> Add images or GIFs showing the sim and summary. Keep files under `docs/screenshots/`.
-
 - **Start screen**  
-  ![Start Screen](docs/screenshots/start_screen.png "Start Screen")
+  ![Start Screen](docs/screenshots/Screenshot 2025-12-02 025548.png "Start Screen")
 
 - **In‑sim: drones scanning and detecting**  
-  ![In Simulation](docs/screenshots/in_sim.png "In Simulation")
+  ![In Simulation](docs/screenshots/Screenshot 2025-12-02 025653.png "In Simulation")
 
 - **Incident dispatch and suppression ring**  
-  ![Dispatch](docs/screenshots/dispatch.png "Dispatch")
+  ![Dispatch/Detect](docs/screenshots/Screenshot 2025-12-02 031355.png "Dispatch/Detect")
 
 - **Summary dashboard (post‑run)**  
-  ![Summary](docs/screenshots/summary.png "Summary Dashboard")
+  ![Summary](docs/screenshots/Screenshot 2025-12-02 025755.png "Summary Dashboard")
 
 ---
 
@@ -109,8 +102,6 @@ python -m venv .venv
 source .venv/bin/activate
 
 # 3) Install dependencies
-pip install -r requirements.txt
-# If you don't have a requirements file yet:
 pip install pygame>=2.4
 ```
 
@@ -127,11 +118,6 @@ python main.py
 - Watch drones detect and dispatch suppression.
 - Press **Esc** (or close the window) to exit to the **Summary Dashboard**.
 
-<p align="center">
-  <!-- Replace with actual path -->
-  <img src="docs/screenshots/in_sim.png" alt="In Simulation" width="70%">
-</p>
-
 ---
 
 ## Controls & Shortcuts
@@ -139,8 +125,6 @@ python main.py
 - **Left‑click** — Ignite a fire at the cursor (radius configurable).
 - **Esc** — End simulation and open the summary.
 - **Window close** — Same as Esc.
-
-(Optionally document any additional keys you added.)
 
 ---
 
@@ -159,15 +143,15 @@ python main.py
 ├── configs/
 │   └── settings.py     # All tunables (screen, sim scale, fire model, drones, economics)
 ├── docs/
-│   └── screenshots/   
-└── requirements.txt
+    └── screenshots/   
+
 ```
 
 ---
 
 ## Configuration
 
-All parameters live in **`configs/settings.py`**. Common ones:
+All parameters are in **`configs/settings.py`**. Common ones:
 
 ### Display & Time
 - `screen_width`, `screen_height`, `fps`
@@ -246,7 +230,7 @@ The summary aggregates everything into six cards:
 - **Potential loss (actual)** = (sum of final areas) → hectares → `econ_cost_per_ha`
 - **Estimated money saved** = **Baseline loss − Actual loss**
 
-> ⚠️ **Assumptions matter.** For fair comparisons, cite the chosen `econ_baseline_delay_min`, `econ_baseline_ros_mps`, and `econ_cost_per_ha` in your report.
+> ⚠️ **Assumptions matter.** Conventional Detection delays and ROS are calculated assumptions (or predictions you can say).
 
 ---
 
@@ -271,29 +255,9 @@ The summary aggregates everything into six cards:
 
 ---
 
-## Roadmap
+## Acknowledgments
 
-- Save/load runs and **export CSV** metrics
-- Optional **screencast** / PNG export hotkey
-- Parameter presets (e.g., “windy day”, “dry fuels”)
-- Alternate drone strategies (lawnmower, frontier following, etc.)
-
----
-
-## Cite / Acknowledgments
-
-If you use this in a write‑up:
-
-```
-@software{firefly2d_sim,
-  title        = {FireFly 2D Wildfire Simulation},
-  author       = {<Your Name>},
-  year         = {2025},
-  url          = {https://github.com/<your-username>/<your-repo>}
-}
-```
-
-Thanks to open‑source **Pygame** and to prior literature on wildfire spread and UAV search strategies that inspired this educational model.
+Thanks to open‑source **Pygame** and to prior literature on wildfire spread and UAV search strategies we were able to build this model.
 
 ---
 
@@ -308,12 +272,3 @@ MIT License — see LICENSE for details.
 
 ---
 
-### Screenshot placeholders (quick copy/paste)
-
-- `docs/screenshots/cover.png`
-- `docs/screenshots/start_screen.png`
-- `docs/screenshots/in_sim.png`
-- `docs/screenshots/dispatch.png`
-- `docs/screenshots/summary.png`
-
-> Tip: keep images ~1280px wide for fast GitHub rendering.
