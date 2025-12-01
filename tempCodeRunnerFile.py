@@ -1,3 +1,4 @@
+# main.py
 import time
 import threading
 from collections import deque
@@ -93,15 +94,16 @@ log_bus.push(
 )
 
 # =========================
-# Main loop (no periodic metrics spam)
+# Main loop
 # =========================
-while running:
+user_running = True
+while user_running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            running = False
+            user_running = False
             break
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-            running = False
+            user_running = False
             break
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             x, y = pygame.mouse.get_pos()
@@ -109,7 +111,7 @@ while running:
             log_bus.push(f"[USER] Ignited at ({x}, {y})")
             continue
 
-    if not running:
+    if not user_running:
         break
 
     dt = clock.tick(cs.fps) / 1000.0
@@ -127,9 +129,9 @@ while running:
 
     pygame.display.flip()
 
+# --- Summary ---
 pygame.display.set_caption("Simulation Summary")
-
-summary = drones.build_summary(sim_fire) 
+summary = drones.build_summary(sim_fire)  # ensures open incidents are snapshotted
 run_summary_screen(screen, clock, summary)
 
 pygame.quit()
