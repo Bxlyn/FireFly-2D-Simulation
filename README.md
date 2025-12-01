@@ -261,14 +261,3 @@ Thanks to open‑source **Pygame** and to prior literature on wildfire spread an
 
 ---
 
-## License
-
-Choose a license and add a `LICENSE` file (MIT recommended for coursework).  
-Example:
-
-```
-MIT License — see LICENSE for details.
-```
-
----
-
