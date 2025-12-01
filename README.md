@@ -28,16 +28,16 @@
 ## Demo
 
 - **Start screen**  
-  ![Start Screen](docs/screenshots/Screenshot 2025-12-02 025548.png "Start Screen")
+  ![Start Screen](/docs/screenshots/Screenshot 2025-12-02 025548.png "Start Screen")
 
 - **In‑sim: drones scanning and detecting**  
-  ![In Simulation](docs/screenshots/Screenshot 2025-12-02 025653.png "In Simulation")
+  ![In Simulation](/docs/screenshots/Screenshot 2025-12-02 025653.png "In Simulation")
 
 - **Incident dispatch and suppression ring**  
-  ![Dispatch/Detect](docs/screenshots/Screenshot 2025-12-02 031355.png "Dispatch/Detect")
+  ![Dispatch/Detect](/docs/screenshots/Screenshot 2025-12-02 031355.png "Dispatch/Detect")
 
 - **Summary dashboard (post‑run)**  
-  ![Summary](docs/screenshots/Screenshot 2025-12-02 025755.png "Summary Dashboard")
+  ![Summary](/docs/screenshots/Screenshot 2025-12-02 025755.png "Summary Dashboard")
 
 ---
 
