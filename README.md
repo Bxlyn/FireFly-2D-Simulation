@@ -159,7 +159,7 @@ python main.py
 ├── configs/
 │   └── settings.py     # All tunables (screen, sim scale, fire model, drones, economics)
 ├── docs/
-│   └── screenshots/    # <-- Put README images here
+│   └── screenshots/   
 └── requirements.txt
 ```
 
