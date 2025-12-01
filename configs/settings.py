@@ -1,3 +1,5 @@
+# configs/settings.py
+
 # --- Screen ---
 screen_width  = 1280
 screen_height = 720
@@ -131,8 +133,8 @@ cradius = 48
 # Minutes of "real world" per 1 simulation second (e.g., 3.33 => 10 min in 3 sim sec)
 sim_to_real_min_per_sec = 10.0 / 3.0
 
-# --- Real-world spatial scale (CRITICAL for your error fix) ---
-# meters per pixel (px → m). Tune this to your map; 0.5 is a reasonable demo value.
+# --- Real-world spatial scale (px → m) ---
+# meters per pixel. Tune this to your map; 0.2 m/px is a reasonable demo value.
 meters_per_px = 0.2
 
 # Optional reference cruise speed for logs
@@ -140,13 +142,11 @@ hybrid_vtol_cruise_kmh = 72.0
 
 # --- Console log retention (terminal) ---
 max_log_lines = 2000
-
-# Periodic metrics print (seconds). Set ≤ 0 to disable in main.
 metrics_log_period_s = 1.0
 
-# --- Economics (IRL baseline) ---
-# Source baseline: EFFIS/ESA estimate ~€10,000 per hectare (see README / code comment)
-econ_currency = "$"        # UI currency symbol
-econ_cost_per_ha = 11599.58 # average IRL loss per hectare 
-# Savings model used in summary: upper bound assuming each incident could fill its monitor disk
-econ_savings_model = "monitor_disk_upper"
+# --- Economic baseline (IRL conventional detection) ---
+# You can change these to test different baselines.
+econ_currency = "$"
+econ_cost_per_ha = 11599.58            # average fully-loaded loss per hectare
+econ_baseline_delay_min = 20.0        # conventional detection delay (minutes)
+econ_baseline_ros_mps   = 1.2         # average ROS (m/s) until conventional detection

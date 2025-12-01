@@ -1,3 +1,4 @@
+# core/fire.py
 import math
 import random
 from typing import List, Tuple, Optional, Dict, Any
@@ -8,17 +9,9 @@ import configs.settings as cs
 
 class Fire:
     """
-    Stochastic CA + Rothermel-inspired spread with INCIDENT suppression:
-      • Drone detection → register incident (merge if near).
-      • After a short delay → suppression zone goes LIVE:
-          - Label entire connected burning cluster (8-neighborhood) with incident id.
-          - Labeled cells cannot ignite neighbors; they still burn out, but faster.
-      • An incident is considered extinguished when no tagged burning cells remain.
-
-    Metrics & tracking:
-      • Cumulative scorched area (unique cells that ever reached BURNED).
-      • Detection times (sim), areas at detection (m²), final areas at extinguish (m²).
-      • Dispatch and extinguish event counts, user ignitions, undetected fires.
+    Stochastic CA + Rothermel-inspired spread with INCIDENT suppression.
+    Tracks detection times, area at detection, final footprint, dispatch/extinguish counts,
+    cumulative scorched area, and user ignitions.
     """
 
     UNBURNED = 0
@@ -26,7 +19,6 @@ class Fire:
     BURNED   = 2
     BARRIER  = 3
 
-    # ------------- init -------------
     def __init__(self, cell_px: Optional[int] = None, seed: Optional[int] = None):
         # Grid
         self.cell = int(cell_px if cell_px is not None else getattr(cs, "fire_cell_px", 8))
@@ -95,24 +87,21 @@ class Fire:
         self.regen_t: List[float] = [0.0] * N
         self._regen_accum = 0.0
 
-        # --- Real-world px→m mapping (optional convenience) ---
-        pxm = None
-        for key in ("px_to_meter", "meters_per_px"):
+        # px → m mapping convenience
+        mpp = None
+        for key in ("meters_per_px", "px_to_meter"):
             if hasattr(cs, key):
-                try:
-                    v = float(getattr(cs, key))
-                    if v > 0.0:
-                        pxm = v
-                        break
-                except Exception:
-                    pass
-        if pxm is None:
-            tgt_kmh = float(getattr(cs, "target_uav_speed_kmh",
-                           getattr(cs, "hybrid_vtol_cruise_kmh", 90.0)))
+                v = float(getattr(cs, key))
+                if v > 0.0:
+                    mpp = v
+                    break
+        if mpp is None:
+            # Fallback to speed mapping
             spx = float(getattr(cs, "speed", 80.0))
+            tgt_kmh = float(getattr(cs, "hybrid_vtol_cruise_kmh", 72.0))
             self._px_to_m = (tgt_kmh / 3.6) / max(spx, 1e-6)
         else:
-            self._px_to_m = pxm
+            self._px_to_m = mpp
 
         # Neighborhood (8)
         self.neigh = [(-1, 0, self.cell), ( 1, 0, self.cell),
@@ -120,14 +109,14 @@ class Fire:
                       (-1,-1, self.cell_diag), ( 1,-1, self.cell_diag),
                       ( 1, 1, self.cell_diag), (-1, 1, self.cell_diag)]
 
-        # Active frontier (indices of currently burning cells)
+        # Active frontier
         self.active: List[int] = []
 
-        # Overlay for draw
+        # Overlay
         self.overlay = pygame.Surface((cs.screen_width, cs.screen_height), pygame.SRCALPHA)
 
-        # Incidents
-        self.incidents: List[Dict[str, Any]] = []  # dicts: {id, cx, cy, monitor_r, ...}
+        # Incidents and suppression
+        self.incidents: List[Dict[str, Any]] = []
         self._next_incident_id = 1
         self._merge_r2   = float(getattr(cs, "incident_merge_radius_px", 100)) ** 2
         self._monitor_r  = float(getattr(cs, "incident_monitor_radius_px", 140))
@@ -136,25 +125,32 @@ class Fire:
         self._grow_v     = float(getattr(cs, "suppress_grow_speed_pxps", 160.0))
         self._quench     = float(getattr(cs, "quench_burn_boost", 6.0))
 
-        # --- Metrics / counters / episode tracking ---
-        self.det_times: List[float] = []          # sim seconds to detection (detected_t - ignited_t)
-        self.detect_areas_m2: List[float] = []    # area at detection (m²), footprint (burning+burned)
-        self.final_areas_m2: List[float] = []     # final area at extinguish (m²), tag-based footprint
+        # Metrics
+        self.det_times: List[float] = []          # sim seconds to detection
+        self.detect_areas_m2: List[float] = []    # area at detection (m²)
+        self.final_areas_m2: List[float] = []     # final area (m²)
         self.dispatch_count: int = 0
         self.extinguished_count: int = 0
         self.user_ignitions: int = 0
 
-        # Cumulative scorched: track unique cells that ever reached BURNED
+        # Cumulative scorched: unique cells that ever reached BURNED
         self._ever_burned: List[bool] = [False] * N
 
-        # Undetected fires estimation (episode has burning but no incident)
+        # Episodes with no incident (extinguished before any detection)
         self.undetected_count: int = 0
         self._episode_has_incident: bool = False
 
-        # Initialize terrain
         self._init_terrain()
 
-    # ------------- terrain -------------
+    # ----- helpers -----
+    @property
+    def px_to_m(self) -> float:
+        return self._px_to_m
+
+    @property
+    def cell_area_m2(self) -> float:
+        return (self.cell * self._px_to_m) ** 2
+
     def _init_terrain(self):
         for gy in range(self.GH):
             for gx in range(self.GW):
@@ -166,29 +162,13 @@ class Fire:
                 if self.rng.random() < self.barrier_density:
                     self.state[idx] = self.BARRIER
 
-    # ------------- indexing -------------
     def _idx(self, gx: int, gy: int) -> int: return gy * self.GW + gx
     def _gxgy(self, idx: int) -> Tuple[int, int]: return (idx % self.GW, idx // self.GW)
     def _center_px(self, gx: int, gy: int) -> Tuple[float, float]:
         return (gx * self.cell + 0.5 * self.cell, gy * self.cell + 0.5 * self.cell)
 
-    # ------------- public scale helpers -------------
-    @property
-    def px_to_m(self) -> float:
-        return self._px_to_m
-
-    @property
-    def cell_area_m2(self) -> float:
-        return (self.cell * self._px_to_m) ** 2
-
-    @property
-    def cumulative_burned_m2(self) -> float:
-        """Convenience: cumulative scorched (ever-burned) area in m²."""
-        return sum(1 for v in self._ever_burned if v) * self.cell_area_m2
-
-    # ------------- ignition API -------------
+    # ----- ignition -----
     def ignite_world(self, x_px: float, y_px: float, radius_px: int = 0):
-        """User-triggered ignition (counts as user action)."""
         self.user_ignitions += 1
         gx = int(x_px // self.cell); gy = int(y_px // self.cell)
         if radius_px <= 0:
@@ -215,7 +195,7 @@ class Fire:
             self.t_ignited[idx] = self.sim_t
             self.active.append(idx)
 
-    # ------------- detection helper for drones -------------
+    # ----- detection helper -----
     def burning_fraction_in_disc(self, x_px: float, y_px: float, r_px: float) -> Tuple[float, list]:
         c = self.cell; r2 = r_px * r_px
         gx0 = max(0, int((x_px - r_px) // c))
@@ -238,9 +218,8 @@ class Fire:
         frac = (burning / inside) if inside > 0 else 0.0
         return frac, hotspots
 
-    # ------------- area / footprint helpers -------------
+    # ----- area / footprint -----
     def footprint_in_disc(self, x_px: float, y_px: float, r_px: float) -> Dict[str, float]:
-        """Count burning + burned cells in a disc; return sim counts + IRL areas."""
         c = self.cell; r2 = r_px * r_px
         gx0 = max(0, int((x_px - r_px) // c))
         gx1 = min(self.GW - 1, int((x_px + r_px) // c))
@@ -252,6 +231,7 @@ class Fire:
             dy2 = (cy - y_px) * (cy - y_px)
             for gx in range(gx0, gx1 + 1):
                 cx = gx * c + 0.5 * c
+                dx = cx - y_px + (cx - cx)  # placeholder to avoid lint noise
                 dx = cx - x_px
                 if dx * dx + dy2 <= r2:
                     inside += 1
@@ -284,7 +264,6 @@ class Fire:
         return self.footprint_in_disc(inc["cx"], inc["cy"], inc["monitor_r"])
 
     def _incident_area_by_tag_m2(self, inc_id: int) -> float:
-        """Footprint area (burning + burned) of cells tagged with inc_id, in m²."""
         cA = self.cell_area_m2
         total_cells = 0
         N = self.GW * self.GH
@@ -295,9 +274,8 @@ class Fire:
                     total_cells += 1
         return total_cells * cA
 
-    # ------------- incidents API -------------
+    # ----- incidents -----
     def _estimate_ignited_time_near(self, cx: float, cy: float, r: float) -> float:
-        """Earliest absolute ignition time among burning cells near (cx,cy)."""
         c = self.cell; r2 = r * r
         gx0 = max(0, int((cx - r) // c)); gx1 = min(self.GW - 1, int((cx + r) // c))
         gy0 = max(0, int((cy - r) // c)); gy1 = min(self.GH - 1, int((cy + r) // c))
@@ -313,15 +291,8 @@ class Fire:
         return self.sim_t if earliest == math.inf else earliest
 
     def register_incident(self, cx: float, cy: float) -> Tuple[int, bool]:
-        """
-        Called by drones upon confirmed detection.
-        Returns (incident_id, is_new).
-        Also records detection time & area at detection for metrics.
-        """
-        # Mark current burning episode as having an incident
         self._episode_has_incident = True
 
-        # Merge with any active incident within radius
         for inc in self.incidents:
             if inc["active"]:
                 if (cx - inc["cx"])**2 + (cy - inc["cy"])**2 <= self._merge_r2:
@@ -332,11 +303,9 @@ class Fire:
         det_t  = self.sim_t
         det_s  = max(0.0, det_t - ign_t)
 
-        # Area at detection (inside monitor disk; burning + burned)
         fp = self.footprint_in_disc(cx, cy, self._monitor_r)
         area_at_detect_m2 = fp["area_m2_total"]
 
-        # Record metrics
         self.det_times.append(det_s)
         self.detect_areas_m2.append(area_at_detect_m2)
 
@@ -348,35 +317,25 @@ class Fire:
             "zone_live": False,
             "zone_r": 0.0,
             "active": True,
-
-            # Timing
             "ignited_t": ign_t,
             "detected_t": det_t,
             "suppressed_t": None,
             "extinguished_t": None,
-
-            # Areas
             "detect_area_m2": area_at_detect_m2,
             "final_area_m2": None,
-
-            # One-shot notification flags (for UI log de-dup)
             "announced_suppression": False,
-            "announced_extinguished": False
+            "announced_extinguished": False,
+            "_counted_final": False,
         })
         return inc_id, True
 
     def incident_is_active(self, inc_id: int) -> bool:
-        """
-        Returns True if incident still has tagged burning cells.
-        When an incident transitions to inactive for the first time, stamps extinguished_t,
-        computes/stores final_area_m2 (tag-based footprint), increments counters.
-        """
         for inc in self.incidents:
             if inc["id"] != inc_id:
                 continue
 
             if inc["zone_live"]:
-                # Check if any burning cells with this tag remain
+                # any burning cells with this tag?
                 has_burning = False
                 for idx in self.active:
                     if self.tag[idx] == inc_id and self.state[idx] == self.BURNING:
@@ -387,20 +346,19 @@ class Fire:
                     inc["active"] = True
                     return True
 
-                # First moment the incident becomes inactive
+                # transitioned to inactive
                 if inc.get("extinguished_t") is None:
                     inc["active"] = False
                     inc["extinguished_t"] = self.sim_t
-
-                    # Compute final footprint area by tag (m²) and store once
                     final_area = self._incident_area_by_tag_m2(inc_id)
                     inc["final_area_m2"] = final_area
-                    self.final_areas_m2.append(final_area)
+                    if not inc["_counted_final"]:
+                        self.final_areas_m2.append(final_area)
+                        inc["_counted_final"] = True
                     self.extinguished_count += 1
-
                 return False
 
-            # Before suppression goes live: check local burning presence
+            # pre-live
             frac, _ = self.burning_fraction_in_disc(inc["cx"], inc["cy"], inc["monitor_r"])
             inc["active"] = (frac > 0.0)
             return inc["active"]
@@ -408,30 +366,24 @@ class Fire:
         return False
 
     def _label_incident_cluster(self, inc: dict):
-        """Label the entire burning cluster connected to seeds near the incident center."""
         inc_id = inc["id"]
         cx0, cy0 = inc["cx"], inc["cy"]
         r2 = inc["monitor_r"] * inc["monitor_r"]
 
-        # Seeds: burning cells within monitor disk
+        # seeds: burning cells in disk
         seeds = []
         for idx in self.active:
             gx, gy = self._gxgy(idx)
             cx, cy = self._center_px(gx, gy)
             if (cx - cx0)*(cx - cx0) + (cy - cy0)*(cy - cy0) <= r2:
                 seeds.append(idx)
-
-        if not seeds:
-            if not self.active:
-                return
-            # fallback: nearest burning cell
+        if not seeds and self.active:
             def d2(idxx):
                 gx, gy = self._gxgy(idxx)
                 px, py = self._center_px(gx, gy)
                 return (px - cx0)*(px - cx0) + (py - cy0)*(py - cy0)
             seeds = [min(self.active, key=d2)]
 
-        # BFS over burning connectivity (8-neighborhood)
         stack = list(seeds)
         visited = set()
         while stack:
@@ -453,25 +405,21 @@ class Fire:
     def _update_incidents(self, dt: float):
         for inc in self.incidents:
             if not inc["zone_live"]:
-                # Pre-activation: if nothing burns near, incident becomes inactive
                 frac, _ = self.burning_fraction_in_disc(inc["cx"], inc["cy"], inc["monitor_r"])
                 if frac <= 0.0:
                     inc["active"] = False
                     continue
-
-                # Count down to suppression start
                 inc["delay"] -= dt
                 if inc["delay"] <= 0.0:
                     inc["zone_live"] = True
                     inc["zone_r"] = min(self._zone_r0, inc["monitor_r"])
                     inc["suppressed_t"] = self.sim_t
                     self._label_incident_cluster(inc)
-                    self.dispatch_count += 1  # for summary
+                    self.dispatch_count += 1
             else:
-                # Optional conceptual growth (not rendered by default)
                 inc["zone_r"] = min(inc["monitor_r"], inc["zone_r"] + self._grow_v * dt)
 
-    # ------------- model core -------------
+    # ----- model core -----
     def _ros_directional(self, dir_unit: Tuple[float, float], fuel: float, moist: float) -> float:
         dryness = max(0.0, 1.0 - (moist / max(1e-6, self.moisture_ext)))
         cos_w = max(0.0, dir_unit[0]*self.wind_unit[0] + dir_unit[1]*self.wind_unit[1])
@@ -490,21 +438,18 @@ class Fire:
         self._ignite_cell(src_gx + dist_cells * dx, src_gy + dist_cells * dy)
 
     def _recover_burned(self, dt: float):
-        """Slowly convert BURNED back to UNBURNED so areas can burn again later (visual / long sim)."""
         if self.recover_T <= 0.0:
             return
         self._regen_accum += dt
-        if self._regen_accum < 0.25:   # amortize work
+        if self._regen_accum < 0.25:
             return
         step = self._regen_accum
         self._regen_accum = 0.0
-
         N = self.GW * self.GH
         for idx in range(N):
             if self.state[idx] == self.BURNED:
                 self.regen_t[idx] += step
                 if self.regen_t[idx] >= self.recover_T:
-                    # reset back to unburned fuel/moisture; NOTE: _ever_burned stays True
                     jitter = (self.rng.random() * 2 - 1) * self.fuel_load_var
                     self.fuel[idx] = max(0.1, self.fuel_load_mean * (1.0 + jitter))
                     m_jit = (self.rng.random() * 2 - 1) * 0.05
@@ -515,49 +460,41 @@ class Fire:
                     self.tag[idx] = 0  # clear stale tag
 
     def update(self, dt: float):
-        # Episode start: if nothing burning, clear episode flag (until an incident is seen)
-        if not self.active:
+        had_burning = (len(self.active) > 0)
+        if not had_burning:
             self._episode_has_incident = False
 
         self.sim_t += dt
-
-        # Incidents (may arm suppression and label clusters)
         self._update_incidents(dt)
 
         if not self.active:
-            # still tick recovery of burned areas
             self._recover_burned(dt)
+            if had_burning and not self.active and not self._episode_has_incident:
+                self.undetected_count += 1
             return
 
         next_active: List[int] = []
         seen_next = set()
-
-        # Which incident tags are actively suppressed right now?
         live_tag_ids = {inc["id"] for inc in self.incidents if inc.get("zone_live", False)}
 
         for idx in self.active:
             if self.state[idx] != self.BURNING:
                 continue
 
-            # accelerated burnout for suppressed cluster
             tagged = (self.tag[idx] in live_tag_ids)
             boost = (1.0 + self._quench) if tagged else 1.0
             self.burn_t[idx] += dt * boost
 
             if self.burn_t[idx] >= self.burn_duration:
-                # Transition to BURNED; mark cumulative scorched
                 self.state[idx] = self.BURNED
                 self._ever_burned[idx] = True
                 continue
 
-            # keep burning
             next_active.append(idx)
 
-            # If suppressed cluster → NO SPREAD
             if tagged:
                 continue
 
-            # Normal stochastic spread to neighbors
             gx, gy = self._gxgy(idx)
             for dx, dy, dpx in self.neigh:
                 ngx = gx + dx; ngy = gy + dy
@@ -573,27 +510,19 @@ class Fire:
                 if self.rng.random() < p_ignite:
                     self.state[nidx] = self.BURNING
                     self.burn_t[nidx] = 0.0
-                    self.t_ignited[nidx] = self.sim_t      # <--- important for correct det_times
+                    self.t_ignited[nidx] = self.sim_t
                     if nidx not in seen_next:
                         next_active.append(nidx); seen_next.add(nidx)
 
-            # Ember spotting allowed only for non-suppressed cells
             if not tagged and self.spot_chance > 0.0:
                 self._ember_spot(gx, gy)
 
-        # Swap frontier and advance recovery
         self.active = next_active
         self._recover_burned(dt)
 
-        # Episode end: if the episode had no incident → undetected fire
-        if not self.active and not self._episode_has_incident:
-            self.undetected_count += 1
-            self._episode_has_incident = False
-
-    # ------------- drawing -------------
+    # ----- drawing -----
     def draw(self, surface: pygame.Surface):
-        self.overlay.fill((0, 0, 0, 0))  # clear
-
+        self.overlay.fill((0, 0, 0, 0))
         c = self.cell
         for gy in range(self.GH):
             for gx in range(self.GW):
@@ -609,7 +538,6 @@ class Fire:
                 elif st == self.BURNED:
                     pygame.draw.rect(self.overlay, (30, 30, 30, 140), (gx * c, gy * c, c, c))
 
-        # optional ring (OFF by default)
         if self.show_zone_ring:
             for inc in self.incidents:
                 if inc.get("zone_live", False) and inc["zone_r"] > 2:
@@ -624,7 +552,7 @@ class Fire:
             for y in range(0, cs.screen_height, c):
                 pygame.draw.line(surface, (20, 20, 20), (0, y), (cs.screen_width, y), 1)
 
-    # ------------- accessors -------------
+    # ----- accessors / flags -----
     def get_incident(self, inc_id: int):
         for inc in self.incidents:
             if inc["id"] == inc_id:
@@ -638,15 +566,8 @@ class Fire:
         if key in inc:
             inc[key] = True
 
-    # ------------- global metrics -------------
+    # ----- metrics -----
     def compute_metrics(self, m_per_px: float) -> Dict[str, float]:
-        """
-        Global fire metrics across the entire grid at the current moment.
-        - perimeter_m: perimeter of (BURNING or BURNED) footprint
-        - burning_area_ha: instantaneous area burning now
-        - scorched_area_ha: cumulative scorched area (unique cells that ever burned)
-        - footprint_area_ha: instantaneous (burning + burned) area now
-        """
         c = self.cell
         W, H = self.GW, self.GH
         burning_cells_now = 0
@@ -666,7 +587,6 @@ class Fire:
                     burning_cells_now += 1
                 elif st == self.BURNED:
                     burned_cells_now += 1
-                # perimeter via 4-neighborhood edges
                 for dx, dy in ((-1,0),(1,0),(0,-1),(0,1)):
                     ngx, ngy = gx + dx, gy + dy
                     if not in_bounds(ngx, ngy):
@@ -676,26 +596,24 @@ class Fire:
                         if self.state[nidx] not in FIRE_SET:
                             perim_edges += 1
 
-        # Cumulative scorched (ever burned at any time)
         ever_burned_cells = sum(1 for v in self._ever_burned if v)
 
         mpp = float(m_per_px)
         cell_area_px2 = c * c
-        burning_m2   = burning_cells_now * cell_area_px2 * (mpp * mpp)
-        burned_m2    = burned_cells_now  * cell_area_px2 * (mpp * mpp)
-        ever_m2      = ever_burned_cells * cell_area_px2 * (mpp * mpp)
+        burning_m2  = burning_cells_now * cell_area_px2 * (mpp * mpp)
+        burned_m2   = burned_cells_now  * cell_area_px2 * (mpp * mpp)
+        ever_m2     = ever_burned_cells * cell_area_px2 * (mpp * mpp)
         footprint_m2 = burning_m2 + burned_m2
-        perimeter_m  = perim_edges * (c * mpp)
+        perimeter_m = perim_edges * (c * mpp)
 
         return {
             "perimeter_m": perimeter_m,
-            "burning_area_ha":   burning_m2   / 10_000.0,
-            "scorched_area_ha":  ever_m2      / 10_000.0,
+            "burning_area_ha": burning_m2  / 10_000.0,
+            "scorched_area_ha": ever_m2    / 10_000.0,
             "footprint_area_ha": footprint_m2 / 10_000.0
         }
 
     def compute_local_metrics(self, cx: float, cy: float, r_px: float, m_per_px: float) -> Dict[str, float]:
-        """Local metrics inside a disk centered at (cx,cy) of radius r_px at the current moment."""
         c = self.cell; r2 = r_px * r_px
         gx0 = max(0, int((cx - r_px) // c))
         gx1 = min(self.GW - 1, int((cx + r_px) // c))
@@ -725,10 +643,28 @@ class Fire:
         burning_m2 = burning_cells * cell_area_px2 * (mpp * mpp)
         burned_m2  = burned_cells  * cell_area_px2 * (mpp * mpp)
         return {
-            "burning_area_ha":   burning_m2 / 10_000.0,
-            "scorched_area_ha":  burned_m2  / 10_000.0,     # local burned-now (not cumulative over time)
+            "burning_area_ha": burning_m2 / 10_000.0,
+            "scorched_area_ha": burned_m2  / 10_000.0,    # local now-burned
             "footprint_area_ha": (burning_m2 + burned_m2) / 10_000.0,
             "burning_cells": burning_cells,
             "burned_cells":  burned_cells,
             "footprint_cells": burning_cells + burned_cells
         }
+
+    # ----- finalize snapshot for summary -----
+    def snapshot_finalize_open_incidents(self):
+        """
+        When the sim stops, snapshot current footprint for any incident without a final area.
+        Does not force-announce UI events; only ensures final_areas_m2 includes all incidents once.
+        """
+        for inc in self.incidents:
+            if inc.get("final_area_m2") is None:
+                # Prefer tag-based footprint if tags exist; else use monitor disk footprint
+                area = self._incident_area_by_tag_m2(inc["id"])
+                if area <= 0.0:
+                    fp = self.footprint_in_disc(inc["cx"], inc["cy"], inc["monitor_r"])
+                    area = fp["area_m2_total"]
+                inc["final_area_m2"] = area
+                if not inc.get("_counted_final", False):
+                    self.final_areas_m2.append(area)
+                    inc["_counted_final"] = True

@@ -1,0 +1,117 @@
+In modern wildfire operations, the conventional baseline typically means:
+
+Baseline = fires detected by humans / watchtowers / 911 calls / camera towers → usually very slow detection
+
+Real data:
+
+Region	Avg. detection delay	Typical spread rate	Notes
+US Forest Service	15–45 minutes	10–50 m/min	Human reports or lookout towers
+EU Forests	12–30 minutes	10–60 m/min	Mixed camera + human reports
+Canada	30–60 minutes	20–100 m/min	Heavily forested areas
+Australia	20–45 minutes	30–80 m/min	Strong winds
+
+Global average detection delay: ~20–40 minutes
+
+Our drone system detects fires within seconds(sim) → unfair to compare areas directly without using IRL spread rates.
+
+So:
+
+Baseline area (real-world conventional detection):
+Abaseline m²=ROS (m/s)×delay (s)×360∘ growth footprint
+A
+baseline m²
+	​
+
+=ROS (m/s)×delay (s)×360∘
+ growth footprint
+
+Simplified (circle growth):
+
+A=π⋅(r2)where r=(ROS×delay)
+A=π⋅(r
+2
+)where r=(ROS×delay)
+
+Real-world ROS (Rate of Spread):
+
+Calm forest fire: 0.2–1.0 m/s
+
+Moderate wind: 1–2 m/s
+
+Dangerous: 2–3 m/s+
+
+A good average for global forests:
+
+→ ROS = 1.2 m/s
+→ Detection delay = 20 min = 1200 seconds
+
+Baseline radius:
+
+r=1.2×1200=1440 m
+r=1.2×1200=1440 m
+
+Baseline area:
+
+A=π⋅14402≈6.5 million m²=650 ha
+A=π⋅1440
+2
+≈6.5 million m²=650 ha
+
+This is why real fires become catastrophic before detection.
+
+2. What does FireFly do?
+
+Our simulation usually detects fires within:
+
+0.5–4 seconds (sim)
+
+At this IRL conversion, that’s:
+
+≈ 10–60 minutes saved in real operations.
+
+So FireFly final area is often:
+
+50–3000 m², tiny compared to 6,500,000 m² baseline.
+
+
+To calculate potential loss baseline is compared to the simulation of Firefly:
+
+
+Baseline Area Calculation:
+Area_baseline = π * (ROS * Delay)^2
+Distance = 1.2 * 1200 = 1440 meters radius
+Area = π * 1440^2 = ~6.5 million m² (~650 hectares)
+
+
+Potential Loss in Sim:
+actual_loss = (total burned area in simulation / 10,000 m² per hectare) 
+              * cost_per_ha
+
+cost_per_ha ≈ $11599 per hectare
+
+Fire burns 4,000 m² = 0.4 ha
+Loss = 0.4 × $12,000 = $4,800
+
+
+
+Baseline Loss:
+baseline_area = baseline_area_per_fire * number_of_incidents
+baseline_loss = (baseline_area / 10,000) * cost_per_ha
+Baseline area per fire = 650 hectares
+
+Cost per hectare = $11,599
+
+Baseline loss per fire ≈ $7.8 million.
+
+
+Money Saved:
+saved = baseline_loss – actual_loss
+
+If: 
+baseline_loss = €7.8M
+
+actual_loss = €7,000
+
+→ saved = €7,793,000
+
+

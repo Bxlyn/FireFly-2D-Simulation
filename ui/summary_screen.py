@@ -7,12 +7,8 @@ def run_summary_screen(screen: pygame.Surface, clock: pygame.time.Clock, summary
     """
     Dashboard-style summary with NO scrolling.
     Layout: 2 columns x 3 rows of cards that fit in the viewport.
-
     Exit keys: ESC / Q / ENTER / SPACE
     """
-
-    # Safety: clear any stale events (e.g., QUIT/ESC from sim loop)
-    pygame.event.clear()
 
     # ----------------------------
     # Helpers
@@ -30,53 +26,13 @@ def run_summary_screen(screen: pygame.Surface, clock: pygame.time.Clock, summary
         return f"{currency}{x:,.2f}"
 
     def fit_font(size: int) -> pygame.font.Font:
-        # Scale fonts relative to a 1280x720 baseline to keep everything on one page
         W, H = screen.get_size()
         scale = min(W / 1280.0, H / 720.0)
         px = max(12, int(size * scale))
         return pygame.font.Font(None, px)
 
-    def draw_card(surface: pygame.Surface, rect: pygame.Rect, title: str, rows):
-        # Card background (with alpha)
-        card = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-        card.fill(card_bg)
-
-        # Accent bar (top)
-        bar_h = max(4, int(4 * scale_y))
-        pygame.draw.rect(card, (255, 215, 120, 180), (0, 0, rect.width, bar_h))
-
-        # Title
-        ts = header_font.render(title, True, header_color)
-        card.blit(ts, (pad_x, pad_y))
-
-        # Compute vertical layout for rows so they fit
-        content_top = pad_y + ts.get_height() + int(8 * scale_y)
-        content_bottom = rect.height - pad_y
-        available = max(0, content_bottom - content_top)
-
-        n = max(1, len(rows))
-        # Base line height; we’ll shrink if needed to ensure it fits
-        line_h = int(26 * scale_y)
-        if n * line_h > available:
-            line_h = max(18, available // n)
-
-        y = content_top
-        for label, value in rows:
-            ls = label_font.render(label, True, label_color)
-            vs = value_font.render(value, True, value_color)
-
-            # If value text is too wide, fall back to label_font size
-            if vs.get_width() > rect.width - (pad_x * 2):
-                vs = label_font.render(value, True, value_color)
-
-            card.blit(ls, (pad_x, y))
-            card.blit(vs, (rect.width - pad_x - vs.get_width(), y))
-            y += line_h
-
-        surface.blit(card, rect.topleft)
-
     # ----------------------------
-    # Colors, Fonts, Metrics
+    # Colors, Fonts, Layout
     # ----------------------------
     W, H = screen.get_size()
     bg = getattr(cs, "dgreen4", (6, 64, 43))
@@ -87,53 +43,84 @@ def run_summary_screen(screen: pygame.Surface, clock: pygame.time.Clock, summary
     label_color = (200, 200, 200)
 
     scale_y = min(W / 1280.0, H / 720.0)
-
-    # Fonts (responsive)
     title_font  = fit_font(64)
     header_font = fit_font(30)
     label_font  = fit_font(22)
     value_font  = fit_font(28)
     foot_font   = fit_font(22)
 
-    # Padding & gaps
     pad_x = int(14 * scale_y)
     pad_y = int(12 * scale_y)
     margin = int(24 * scale_y)
     col_gap = int(24 * scale_y)
     row_gap = int(18 * scale_y)
 
-    # Economic params
-    currency = summary.get("econ_currency", "€")
+    currency = summary.get("econ_currency", "$")
 
-    # Quick derived stats
+    # --- card renderer (uses fonts computed above) ---
+    def draw_card(surface: pygame.Surface, rect: pygame.Rect, title: str, rows):
+        card = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        card.fill(card_bg)
+
+        # Accent bar
+        pygame.draw.rect(card, (255, 215, 120, 180), (0, 0, rect.width, max(4, int(4 * scale_y))),
+                         border_top_left_radius=8, border_top_right_radius=8)
+
+        # Title
+        ts = header_font.render(title, True, header_color)
+        card.blit(ts, (pad_x, pad_y))
+
+        # Rows (auto-fit)
+        content_top = pad_y + ts.get_height() + int(8 * scale_y)
+        content_bottom = rect.height - pad_y
+        available = max(0, content_bottom - content_top)
+        n = max(1, len(rows))
+        line_h = int(26 * scale_y)
+        if n * line_h > available:
+            line_h = max(18, available // n)
+
+        y = content_top
+        for label, value in rows:
+            ls = label_font.render(label, True, label_color)
+            vs = value_font.render(value, True, value_color)
+            if vs.get_width() > rect.width - (pad_x * 2):
+                vs = label_font.render(value, True, value_color)
+            card.blit(ls, (pad_x, y))
+            card.blit(vs, (rect.width - pad_x - vs.get_width(), y))
+            y += line_h
+
+        surface.blit(card, rect.topleft)
+
+    # ----------------------------
+    # Derived stats
+    # ----------------------------
     fires_detected = int(summary.get("fires_detected", 0))
     undetected = int(summary.get("undetected_fires", 0))
     episodes = fires_detected + undetected
     detect_rate = (fires_detected / episodes * 100.0) if episodes else 0.0
 
+    # Baseline params (for label)
+    baseline_delay_min = float(summary.get("econ_baseline_delay_min", 20.0))
+    baseline_ros_mps   = float(summary.get("econ_baseline_ros_mps", 1.2))
+
     # ----------------------------
-    # Grid Geometry (2 cols x 3 rows)
+    # Grid (2 x 3)
     # ----------------------------
     title_srf = title_font.render("Simulation Summary", True, title_color)
-    footer_srf = foot_font.render("ESC / ENTER / SPACE to exit", True, (200, 200, 200))
-
     title_h = title_srf.get_height()
+    footer_srf = foot_font.render("ESC / ENTER / SPACE to exit", True, (200, 200, 200))
     footer_h = footer_srf.get_height()
 
-    top_y = margin + title_h + margin   # title + gap
+    top_y = margin + title_h + margin
     bottom_y = H - margin - footer_h - margin
     content_h = max(100, bottom_y - top_y)
 
-    # 3 rows of equal height
-    rows_count = 3
-    row_h = (content_h - row_gap * (rows_count - 1)) // rows_count
-
-    # 2 equal columns
+    rows_cnt = 3
+    row_h = (content_h - row_gap * (rows_cnt - 1)) // rows_cnt
     col_w = (W - margin * 2 - col_gap) // 2
     left_x = margin
     right_x = margin + col_w + col_gap
 
-    # Card rects
     L1 = pygame.Rect(left_x,  top_y + 0 * (row_h + row_gap), col_w, row_h)
     L2 = pygame.Rect(left_x,  top_y + 1 * (row_h + row_gap), col_w, row_h)
     L3 = pygame.Rect(left_x,  top_y + 2 * (row_h + row_gap), col_w, row_h)
@@ -143,9 +130,8 @@ def run_summary_screen(screen: pygame.Surface, clock: pygame.time.Clock, summary
     R3 = pygame.Rect(right_x, top_y + 2 * (row_h + row_gap), col_w, row_h)
 
     # ----------------------------
-    # Prepare Card Data
+    # Card data
     # ----------------------------
-
     # Row 1: Time (L) + Drone (R)
     time_rows = [
         ("Simulation duration", f"{summary.get('sim_time', 0.0):.2f} s"),
@@ -177,13 +163,17 @@ def run_summary_screen(screen: pygame.Surface, clock: pygame.time.Clock, summary
     cost_per_ha    = float(summary.get("econ_cost_per_ha", 10000.0))
     total_final_m2 = float(summary.get("total_burned_m2", 0.0))
     total_detect_m2= float(summary.get("total_detect_area_m2", 0.0))
+    baseline_area_per_fire_m2 = float(summary.get("econ_baseline_area_per_fire_m2", 0.0))
+    incidents_counted         = int(summary.get("econ_incidents_counted", 0))
 
     econ_rows = [
-        ("Baseline cost / ha",      f"{currency}{cost_per_ha:,.0f}"),
+        ("Baseline (conv.)",      f"{baseline_delay_min:.0f} min @ {baseline_ros_mps:.1f} m/s"),
+        ("Baseline cost / ha",    f"{currency}{cost_per_ha:,.0f}"),
         ("Potential loss (actual)", fmt_money(pot_loss, currency)),
-        ("Upper-bound baseline",    fmt_money(base_loss, currency)),
-        ("Estimated money saved",   fmt_money(saved_upper, currency)),
+        ("Baseline loss (conv.)", fmt_money(base_loss, currency)),
+        ("Estimated money saved", fmt_money(saved_upper, currency)),
         ("Final area (all incidents)", fmt_area(total_final_m2)),
+        (f"Baseline area × {incidents_counted}", fmt_area(baseline_area_per_fire_m2 * max(incidents_counted, 0))),
     ]
     if total_detect_m2 > 0:
         econ_rows.append(("Area @ first detection (sum)", fmt_area(total_detect_m2)))
@@ -194,7 +184,6 @@ def run_summary_screen(screen: pygame.Surface, clock: pygame.time.Clock, summary
         ("Total scorched area", fmt_area(summary.get("total_scorched_m2", 0.0))),
         ("Largest footprint",   fmt_area(summary.get("biggest_fire_m2", 0.0))),
     ]
-
     incidents_rows = [
         ("Detected fires",      f"{fires_detected}"),
         ("Undetected fires",    f"{undetected}"),
@@ -203,7 +192,7 @@ def run_summary_screen(screen: pygame.Surface, clock: pygame.time.Clock, summary
     ]
 
     # ----------------------------
-    # Render Loop (no scrolling)
+    # Render loop
     # ----------------------------
     running = True
     while running:
@@ -215,21 +204,15 @@ def run_summary_screen(screen: pygame.Surface, clock: pygame.time.Clock, summary
                     return
 
         screen.fill(bg)
-
-        # Title (top center)
         screen.blit(title_srf, title_srf.get_rect(midtop=(W // 2, margin)))
 
-        # Cards
         draw_card(screen, L1, "Run Time", time_rows)
         draw_card(screen, R1, "Drone Performance", drone_rows)
-
         draw_card(screen, L2, "Fire Detection", det_rows)
         draw_card(screen, R2, "Economic Impact", econ_rows)
-
         draw_card(screen, L3, "Totals", totals_rows)
         draw_card(screen, R3, "Incidents & Events", incidents_rows)
 
-        # Footer (bottom center)
         screen.blit(footer_srf, footer_srf.get_rect(midbottom=(W // 2, H - margin)))
 
         pygame.display.flip()
