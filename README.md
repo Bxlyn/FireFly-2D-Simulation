@@ -80,9 +80,8 @@
 
 - **Economics**  
   Compares the **actual final area** with an **upper‑bound baseline** modeling *conventional detection* with a delay and an assumed ROS (rate of spread):  
-$$
-A_{\text{baseline per fire}} \approx \pi (ROS \cdot delay)^2
-$$
+`\( A_{\text{baseline per fire}} \approx \pi (ROS \cdot delay)^2 \)`
+
  
   Cost is computed with a configurable **cost per hectare**.
 
