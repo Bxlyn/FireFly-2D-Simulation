@@ -80,7 +80,10 @@
 
 - **Economics**  
   Compares the **actual final area** with an **upper‑bound baseline** modeling *conventional detection* with a delay and an assumed ROS (rate of spread):  
-  \( A_{\text{baseline per fire}} \approx \pi (ROS \cdot delay)^2 \).  
+$$
+A_{\text{baseline per fire}} \approx \pi (ROS \cdot delay)^2
+$$
+ 
   Cost is computed with a configurable **cost per hectare**.
 
 ---
@@ -91,8 +94,8 @@
 
 ```bash
 # 1) Clone
-git clone https://github.com/<your-username>/<your-repo>.git
-cd <your-repo>
+git clone https://github.com/Bxlyn/FireFly-2D-Simulation.git
+cd FireFly-2D-Simulation
 
 # 2) (Optional but recommended) Create a virtual env
 python -m venv .venv
