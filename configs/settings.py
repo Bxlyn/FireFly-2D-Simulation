@@ -131,7 +131,7 @@ cradius = 48
 
 # --- IRL Adaptation ---
 # Minutes of "real world" per 1 simulation second (e.g., 3.33 => 10 min in 3 sim sec)
-sim_to_real_min_per_sec = 10.0 / 3.0
+sim_to_real_min_per_sec = 30.0 / 3.0
 
 # --- Real-world spatial scale (px → m) ---
 # meters per pixel. Tune this to your map; 0.2 m/px is a reasonable demo value.
